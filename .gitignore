@@ -49,5 +49,9 @@ logs/*.csv
 # OS / IDE
 .DS_Store
 Thumbs.db
-.vscode/
 .idea/
+
+# VS Code: 실행 설정은 공유하고, 개인 설정은 제외
+.vscode/*
+!.vscode/launch.json
+!.vscode/settings.json
