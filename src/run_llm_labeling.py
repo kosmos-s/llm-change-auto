@@ -1,7 +1,7 @@
 """Run LLM labeling for scanned dataset rows.
 
 Example:
-    python src/run_llm_labeling.py --input outputs/dataset_index.csv --source dataset --split test --limit 10
+    python src/run_llm_labeling.py --provider gemini --model gemini-2.5-flash --input outputs/dataset_index.csv --source dataset --split test --limit 10
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from pathlib import Path
 import pandas as pd
 from tqdm import tqdm
 
-from llm_client import ask_openai_vision
+from llm_client import ask_vision
 from parse_llm_result import extract_json, normalize_result
 from prompt_builder import load_prompt, build_prompt
 
@@ -43,7 +43,8 @@ def run(
     split: str = "test",
     start: int = 0,
     limit: int | None = None,
-    model: str = "gpt-4o-mini",
+    model: str = "gemini-2.5-flash",
+    provider: str = "gemini",
 ) -> None:
     df = pd.read_csv(input_csv)
     df = filter_dataframe(df, source=source, split=split, start=start, limit=limit)
@@ -59,10 +60,11 @@ def run(
         # 기존 정답 라벨은 LLM에 제공하지 않는다. 파일명만 힌트로 전달한다.
         prompt = build_prompt(base_prompt, row.get("image_name"), None)
         result_row = row.to_dict()
+        result_row["llm_provider"] = provider
         result_row["llm_model"] = model
         result_row["prompt_path"] = str(prompt_path)
         try:
-            raw_text = ask_openai_vision(image_path, prompt, model=model)
+            raw_text = ask_vision(image_path, prompt, model=model, provider=provider)
             parsed = normalize_result(extract_json(raw_text))
             result_row.update(parsed)
             result_row["raw_response"] = raw_text
@@ -78,7 +80,7 @@ def run(
 
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_csv(output_csv, index=False, encoding="utf-8-sig")
-    print(f"source={source} split={split} rows={len(rows)} saved={output_csv}")
+    print(f"provider={provider} model={model} source={source} split={split} rows={len(rows)} saved={output_csv}")
 
 
 def main() -> None:
@@ -90,7 +92,8 @@ def main() -> None:
     parser.add_argument("--split", choices=["test", "train", "val", "all"], default="test")
     parser.add_argument("--start", type=int, default=0)
     parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--model", default="gpt-4o-mini")
+    parser.add_argument("--provider", choices=["gemini", "openai"], default="gemini")
+    parser.add_argument("--model", default="gemini-2.5-flash")
     args = parser.parse_args()
 
     run(
@@ -102,6 +105,7 @@ def main() -> None:
         start=args.start,
         limit=args.limit,
         model=args.model,
+        provider=args.provider,
     )
 
 
