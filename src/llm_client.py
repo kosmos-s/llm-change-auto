@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import requests
 from dotenv import load_dotenv
 
 from image_utils import image_to_base64
@@ -46,34 +47,50 @@ def ask_gemini_vision(image_path: str | Path, prompt: str, model: str = "gemini-
     if not image_path.exists():
         raise FileNotFoundError(f"이미지 파일을 찾을 수 없습니다: {image_path}")
 
-    try:
-        from google import genai
-    except ImportError as exc:
-        raise RuntimeError("google-genai가 설치되지 않았습니다. pip install -r requirements.txt를 실행하세요.") from exc
-
     image_b64 = image_to_base64(image_path)
     mime = get_mime_type(image_path)
+    timeout_sec = int(os.getenv("GEMINI_TIMEOUT", "60"))
 
-    client = genai.Client(api_key=api_key)
-
-    # Gemini 공식 문서의 inline image data 방식: text + image data를 함께 전달한다.
-    # JSON만 반환하도록 prompt에도 지시하고 response_format도 JSON MIME으로 요청한다.
-    interaction = client.interactions.create(
-        model=model,
-        input=[
-            {"type": "text", "text": prompt},
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    payload = {
+        "contents": [
             {
-                "type": "image",
-                "data": image_b64,
-                "mime_type": mime,
-            },
+                "role": "user",
+                "parts": [
+                    {"text": prompt},
+                    {
+                        "inline_data": {
+                            "mime_type": mime,
+                            "data": image_b64,
+                        }
+                    },
+                ],
+            }
         ],
-        response_format={
-            "type": "text",
-            "mime_type": "application/json",
+        "generationConfig": {
+            "temperature": 0,
+            "response_mime_type": "application/json",
         },
+    }
+    response = requests.post(
+        url,
+        params={"key": api_key},
+        json=payload,
+        timeout=timeout_sec,
     )
-    return getattr(interaction, "output_text", "") or ""
+    if response.status_code >= 400:
+        raise RuntimeError(f"Gemini API 오류 {response.status_code}: {response.text[:1000]}")
+
+    data = response.json()
+    candidates = data.get("candidates", [])
+    if not candidates:
+        raise RuntimeError(f"Gemini 응답에 candidates가 없습니다: {data}")
+
+    parts = candidates[0].get("content", {}).get("parts", [])
+    texts = [part.get("text", "") for part in parts if part.get("text")]
+    if not texts:
+        raise RuntimeError(f"Gemini 응답에 text가 없습니다: {data}")
+    return "\n".join(texts)
 
 
 def ask_openai_vision(image_path: str | Path, prompt: str, model: str = "gpt-4o-mini") -> str:
