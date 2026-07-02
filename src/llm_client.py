@@ -1,6 +1,6 @@
 """LLM/VLM client wrapper.
 
-현재는 OpenAI Vision API 호출 구조를 기준으로 작성한다.
+OpenAI와 Gemini를 모두 지원한다.
 API Key는 .env에 저장하고 GitHub에는 올리지 않는다.
 """
 
@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+
 from dotenv import load_dotenv
-from openai import OpenAI
 
 from image_utils import image_to_base64
 
@@ -28,6 +28,54 @@ def get_mime_type(image_path: Path) -> str:
     return "image/jpeg"
 
 
+def ask_vision(image_path: str | Path, prompt: str, model: str, provider: str = "gemini") -> str:
+    provider = provider.lower().strip()
+    if provider == "gemini":
+        return ask_gemini_vision(image_path, prompt, model=model)
+    if provider == "openai":
+        return ask_openai_vision(image_path, prompt, model=model)
+    raise ValueError(f"지원하지 않는 provider입니다: {provider}")
+
+
+def ask_gemini_vision(image_path: str | Path, prompt: str, model: str = "gemini-2.5-flash") -> str:
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY가 설정되지 않았습니다. .env 파일을 확인하세요.")
+
+    image_path = Path(image_path)
+    if not image_path.exists():
+        raise FileNotFoundError(f"이미지 파일을 찾을 수 없습니다: {image_path}")
+
+    try:
+        from google import genai
+    except ImportError as exc:
+        raise RuntimeError("google-genai가 설치되지 않았습니다. pip install -r requirements.txt를 실행하세요.") from exc
+
+    image_b64 = image_to_base64(image_path)
+    mime = get_mime_type(image_path)
+
+    client = genai.Client(api_key=api_key)
+
+    # Gemini 공식 문서의 inline image data 방식: text + image data를 함께 전달한다.
+    # JSON만 반환하도록 prompt에도 지시하고 response_format도 JSON MIME으로 요청한다.
+    interaction = client.interactions.create(
+        model=model,
+        input=[
+            {"type": "text", "text": prompt},
+            {
+                "type": "image",
+                "data": image_b64,
+                "mime_type": mime,
+            },
+        ],
+        response_format={
+            "type": "text",
+            "mime_type": "application/json",
+        },
+    )
+    return getattr(interaction, "output_text", "") or ""
+
+
 def ask_openai_vision(image_path: str | Path, prompt: str, model: str = "gpt-4o-mini") -> str:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -36,6 +84,11 @@ def ask_openai_vision(image_path: str | Path, prompt: str, model: str = "gpt-4o-
     image_path = Path(image_path)
     if not image_path.exists():
         raise FileNotFoundError(f"이미지 파일을 찾을 수 없습니다: {image_path}")
+
+    try:
+        from openai import OpenAI
+    except ImportError as exc:
+        raise RuntimeError("openai가 설치되지 않았습니다. pip install -r requirements.txt를 실행하세요.") from exc
 
     image_b64 = image_to_base64(image_path)
     mime = get_mime_type(image_path)
