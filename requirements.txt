@@ -8,3 +8,4 @@ openai>=1.0.0
 requests>=2.31.0
 ipykernel>=6.29.0
 notebook>=7.0.0
+streamlit>=1.36.0
