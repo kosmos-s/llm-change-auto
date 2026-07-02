@@ -1,6 +1,6 @@
 """Unified Streamlit entrypoint.
 
-검수 UI와 LLM 자동화 UI를 하나의 Streamlit 서버에서 함께 사용한다.
+검수 UI, LLM 자동화 UI, 통계 UI를 하나의 Streamlit 서버에서 함께 사용한다.
 
 Run:
     streamlit run app/main_app.py
@@ -27,12 +27,13 @@ st.markdown(
 
 - **검수 UI**: `dataset/errors` 이미지를 보고 JSON 라벨을 수정합니다.
 - **LLM 자동화 UI**: 데이터 인덱스 생성, LLM 자동판별, 라벨 비교, 검수 대상 CSV 생성을 실행합니다.
+- **통계 UI**: 생성된 CSV와 reviewed_json 저장 결과를 요약합니다.
 
 두 화면은 이제 하나의 Streamlit 앱 안에서 동작하므로 `localhost:8501` 하나만 사용합니다.
 """
 )
 
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 
 with col1:
     st.subheader("검수 UI")
@@ -43,6 +44,11 @@ with col2:
     st.subheader("LLM 자동화 UI")
     st.write("LLM 실행부터 검수 대상 CSV 생성까지 버튼으로 처리합니다.")
     st.page_link("pages/2_LLM_자동화_UI.py", label="LLM 자동화 UI 열기", icon="🤖")
+
+with col3:
+    st.subheader("통계 UI")
+    st.write("CSV 결과와 reviewed_json 저장 현황을 요약합니다.")
+    st.page_link("pages/3_통계_UI.py", label="통계 UI 열기", icon="📊")
 
 st.divider()
 st.info("VS Code에서는 `app/run_app.py`를 열고 Ctrl + F5를 누르면 이 통합 UI가 실행됩니다.")
