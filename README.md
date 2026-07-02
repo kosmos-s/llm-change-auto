@@ -10,6 +10,7 @@
 - LLM/VLM 자동 변화유무 판단
 - 기존 JSON 라벨과 LLM 결과 비교
 - 육안검수 대상 CSV 생성
+- `review_list.csv` 기반 검수 대상만 보기
 - Streamlit 통합 UI 제공
 
 ---
@@ -133,20 +134,48 @@ http://localhost:8501
 
 | 페이지 | 역할 |
 |---|---|
-| `검수 UI` | 이미지 확인, JSON 라벨 수정, reason 입력 |
+| `검수 UI` | 이미지 확인, JSON 라벨 수정, reason 입력, LLM 검수 대상 CSV 확인 |
 | `LLM 자동화 UI` | 데이터 인덱스 생성, LLM 실행, 라벨 비교, 검수 목록 생성 |
 
 ---
 
 ## 5. 검수 UI 기능
 
-검수 UI에서는 아래 작업을 할 수 있습니다.
+검수 UI에는 두 가지 모드가 있습니다.
+
+### 폴더 전체 검수
+
+폴더 기준으로 전체 데이터를 불러옵니다.
 
 - `dataset / errors / both` 선택
 - `test / train / val / all` 선택
 - `combined / left / right` 이미지 전환
 - 현재 파일이 `dataset`인지 `errors`인지 표시
 - `errors` 하위 오류 유형 폴더명 표시
+
+### LLM 검수 대상 CSV
+
+LLM 자동화 UI에서 생성한 검수 대상 CSV만 불러옵니다.
+
+예시 파일:
+
+```text
+outputs/review_lists/dataset_test_10_review.csv
+```
+
+이 모드에서는 CSV에 들어 있는 파일만 순서대로 보여주며, 화면에 아래 정보도 같이 표시합니다.
+
+- LLM change
+- confidence
+- label_mismatch
+- detail_mismatch
+- detail_mismatch_keys
+- review_reasons
+- 기존 라벨과 LLM 라벨 비교표
+- LLM 판단 근거
+
+### 공통 검수 기능
+
 - 체크박스로 라벨 수정
 - `reason`, `reason (KO)` 수정
 - `Previous File`, `Next File`, `Jump` 이동
@@ -196,6 +225,8 @@ outputs/compare_results/dataset_test_10_compare.csv
 outputs/review_lists/dataset_test_10_review.csv
 ```
 
+생성 후 검수 UI에서 `LLM 검수 대상 CSV` 모드로 `outputs/review_lists/dataset_test_10_review.csv`를 불러오면 됩니다.
+
 ---
 
 ## 7. API Key 설정
@@ -232,7 +263,7 @@ llm-change-auto/
 │     └─ 2_LLM_자동화_UI.py
 │
 ├─ src/
-│  ├─ dataset_loader.py           # 검수 UI용 dataset/errors 로더
+│  ├─ dataset_loader.py           # 폴더 로드 + review_list.csv 로드
 │  ├─ json_io.py                  # JSON 라벨 읽기/저장
 │  ├─ scan_dataset.py             # 전체 데이터 CSV 인덱스 생성
 │  ├─ llm_client.py               # OpenAI Vision 호출
@@ -308,6 +339,14 @@ python -m streamlit run app\main_app.py
 
 앱에서 `dataset/errors`와 `test/train/val`은 사이드바에서 선택합니다.
 
+### LLM 검수 대상 CSV를 불러오지 못함
+
+먼저 LLM 자동화 UI에서 `검수 목록 생성`까지 실행해 아래 파일을 만들어야 합니다.
+
+```text
+outputs/review_lists/dataset_test_10_review.csv
+```
+
 ---
 
 ## 10. 현재 구현 상태
@@ -325,6 +364,7 @@ python -m streamlit run app\main_app.py
 - [x] LLM 결과 CSV 저장
 - [x] 기존 라벨과 LLM 결과 비교
 - [x] 검수 대상 CSV 생성
-- [ ] 검수 UI에서 review_list.csv만 불러오기
-- [ ] LLM 결과와 원본 라벨을 검수 UI에서 동시에 비교 표시
+- [x] 검수 UI에서 review_list.csv만 불러오기
+- [x] LLM 결과와 원본 라벨을 검수 UI에서 동시에 비교 표시
 - [ ] 검수 결과 통계 화면 추가
+- [ ] reviewed_json 저장 결과를 원본/LLM 결과와 통계 비교
