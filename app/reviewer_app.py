@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
 
 import streamlit as st
 
@@ -16,7 +17,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from dataset_loader import SampleItem, find_combined_images
+from dataset_loader import SampleItem, find_combined_images, find_items_from_review_csv
 from json_io import get_label_state, has_korean_reason, load_json, save_json, update_label_json
 
 
@@ -46,10 +47,29 @@ SOURCE_LABELS = {
     "both": "both - dataset + errors",
 }
 
+LABEL_COMPARE_KEYS = [
+    ("arti", "Artifact"),
+    ("arti_bu", "arti_bu"),
+    ("arti_bu_t", "arti_bu_t"),
+    ("arti_binil", "arti_binil"),
+    ("arti_road", "arti_road"),
+    ("arti_roa_m", "arti_roa_m"),
+    ("arti_other", "arti_other"),
+    ("tree", "Tree"),
+    ("fore", "forest"),
+    ("farm", "farmland"),
+    ("water", "water"),
+]
+
 
 @st.cache_data(show_spinner=False)
 def load_items(root: str, split: str, source: str) -> list[SampleItem]:
     return find_combined_images(root, split, source)
+
+
+@st.cache_data(show_spinner=False)
+def load_review_items(csv_path: str) -> list[SampleItem]:
+    return find_items_from_review_csv(csv_path)
 
 
 def init_state() -> None:
@@ -58,9 +78,12 @@ def init_state() -> None:
     st.session_state.setdefault("loaded_root", "")
     st.session_state.setdefault("loaded_split", "test")
     st.session_state.setdefault("loaded_source", "dataset")
+    st.session_state.setdefault("loaded_mode", "folder")
+    st.session_state.setdefault("loaded_review_csv", "")
     st.session_state.setdefault("view_mode", "combined")
     st.session_state.setdefault("split_choice", "test")
     st.session_state.setdefault("source_choice", "dataset")
+    st.session_state.setdefault("review_mode_choice", "folder")
 
 
 def clamp_index() -> None:
@@ -89,10 +112,11 @@ def image_path_for_view(item: SampleItem, view_mode: str) -> Path:
 
 def widget_key(item: SampleItem, name: str) -> str:
     safe_folder = item.relative_folder.replace("/", "_").replace("\\", "_").replace(".", "root")
-    return f"{item.source}_{item.split}_{safe_folder}_{item.image_id}_{name}"
+    review_row = item.llm_info.get("review_csv_row", "") if item.llm_info else ""
+    return f"{item.source}_{item.split}_{safe_folder}_{item.image_id}_{review_row}_{name}"
 
 
-def do_load(root: str, split: str, source: str) -> None:
+def do_load_folder(root: str, split: str, source: str) -> None:
     root_path = Path(root)
     if not root_path.exists():
         st.sidebar.error(f"경로가 없습니다: {root_path}")
@@ -104,6 +128,8 @@ def do_load(root: str, split: str, source: str) -> None:
     st.session_state["loaded_root"] = str(root_path)
     st.session_state["loaded_split"] = split
     st.session_state["loaded_source"] = source
+    st.session_state["loaded_mode"] = "folder"
+    st.session_state["loaded_review_csv"] = ""
 
     if st.session_state["items"]:
         st.sidebar.success(f"{SOURCE_LABELS.get(source, source)} / {split}: {len(st.session_state['items'])}개 로드 완료")
@@ -111,49 +137,98 @@ def do_load(root: str, split: str, source: str) -> None:
         st.sidebar.warning("*_combined.jpg 파일을 찾지 못했습니다. 데이터 종류, 분할, 경로를 확인하세요.")
 
 
+def do_load_review_csv(csv_path: str) -> None:
+    path = Path(csv_path)
+    if not path.exists():
+        st.sidebar.error(f"CSV 파일이 없습니다: {path}")
+        return
+
+    st.cache_data.clear()
+    try:
+        items = load_review_items(str(path))
+    except Exception as exc:
+        st.sidebar.error(f"CSV를 불러오지 못했습니다: {exc}")
+        return
+
+    st.session_state["items"] = items
+    st.session_state["index"] = 0
+    st.session_state["loaded_mode"] = "review_csv"
+    st.session_state["loaded_review_csv"] = str(path)
+    st.session_state["loaded_root"] = ""
+    st.session_state["loaded_split"] = "csv"
+    st.session_state["loaded_source"] = "csv"
+
+    if items:
+        st.sidebar.success(f"검수 대상 CSV: {len(items)}개 로드 완료")
+    else:
+        st.sidebar.warning("CSV에서 image_path를 가진 검수 대상을 찾지 못했습니다.")
+
+
 def render_sidebar() -> None:
     st.sidebar.title("데이터 불러오기")
-    default_root = str(Path.home() / "Desktop" / "산학과제" / "dataset_sample")
-    root = st.sidebar.text_input("데이터 루트 경로", value=st.session_state.get("loaded_root") or default_root)
 
-    st.sidebar.caption("데이터 종류")
-    source = st.sidebar.radio(
-        "데이터 종류",
-        ["dataset", "errors", "both"],
-        format_func=lambda value: SOURCE_LABELS[value],
-        key="source_choice",
-        label_visibility="collapsed",
+    mode = st.sidebar.radio(
+        "검수 모드",
+        ["folder", "review_csv"],
+        format_func=lambda value: "폴더 전체 검수" if value == "folder" else "LLM 검수 대상 CSV",
+        key="review_mode_choice",
     )
 
-    st.sidebar.caption("분할 선택")
-    split = st.sidebar.radio(
-        "분할 선택",
-        ["test", "train", "val", "all"],
-        key="split_choice",
-        label_visibility="collapsed",
-    )
+    if mode == "folder":
+        default_root = str(Path.home() / "Desktop" / "산학과제" / "dataset_sample")
+        root = st.sidebar.text_input("데이터 루트 경로", value=st.session_state.get("loaded_root") or default_root)
 
-    col1, col2 = st.sidebar.columns(2)
-    with col1:
-        if st.button("Load", use_container_width=True):
-            do_load(root, split, source)
-    with col2:
-        if st.button("Reload", use_container_width=True):
-            do_load(root, split, source)
+        st.sidebar.caption("데이터 종류")
+        source = st.sidebar.radio(
+            "데이터 종류",
+            ["dataset", "errors", "both"],
+            format_func=lambda value: SOURCE_LABELS[value],
+            key="source_choice",
+            label_visibility="collapsed",
+        )
 
-    already_loaded = bool(st.session_state.get("items"))
-    same_root = str(Path(root)) == st.session_state.get("loaded_root")
-    source_changed = source != st.session_state.get("loaded_source")
-    split_changed = split != st.session_state.get("loaded_split")
-    if already_loaded and same_root and (source_changed or split_changed):
-        do_load(root, split, source)
+        st.sidebar.caption("분할 선택")
+        split = st.sidebar.radio(
+            "분할 선택",
+            ["test", "train", "val", "all"],
+            key="split_choice",
+            label_visibility="collapsed",
+        )
+
+        col1, col2 = st.sidebar.columns(2)
+        with col1:
+            if st.button("Load", use_container_width=True):
+                do_load_folder(root, split, source)
+        with col2:
+            if st.button("Reload", use_container_width=True):
+                do_load_folder(root, split, source)
+
+        already_loaded = bool(st.session_state.get("items")) and st.session_state.get("loaded_mode") == "folder"
+        same_root = str(Path(root)) == st.session_state.get("loaded_root")
+        source_changed = source != st.session_state.get("loaded_source")
+        split_changed = split != st.session_state.get("loaded_split")
+        if already_loaded and same_root and (source_changed or split_changed):
+            do_load_folder(root, split, source)
+
+    else:
+        default_csv = str(PROJECT_ROOT / "outputs" / "review_lists" / "dataset_test_10_review.csv")
+        csv_path = st.sidebar.text_input("review_list.csv 경로", value=st.session_state.get("loaded_review_csv") or default_csv)
+        if st.sidebar.button("Load Review CSV", use_container_width=True):
+            do_load_review_csv(csv_path)
+        st.sidebar.caption("LLM 자동화 UI에서 생성한 `outputs/review_lists/*_review.csv` 파일을 불러옵니다.")
 
     if st.session_state.get("items"):
-        st.sidebar.caption(
-            f"현재 로드: {SOURCE_LABELS.get(st.session_state.get('loaded_source'), st.session_state.get('loaded_source'))} / "
-            f"{st.session_state.get('loaded_split')} / "
-            f"{len(st.session_state.get('items', []))}개"
-        )
+        loaded_mode = st.session_state.get("loaded_mode")
+        if loaded_mode == "review_csv":
+            st.sidebar.caption(
+                f"현재 로드: LLM 검수 대상 CSV / {len(st.session_state.get('items', []))}개"
+            )
+        else:
+            st.sidebar.caption(
+                f"현재 로드: {SOURCE_LABELS.get(st.session_state.get('loaded_source'), st.session_state.get('loaded_source'))} / "
+                f"{st.session_state.get('loaded_split')} / "
+                f"{len(st.session_state.get('items', []))}개"
+            )
 
     st.sidebar.divider()
     st.sidebar.caption("이미지 보기")
@@ -275,18 +350,71 @@ def render_label_panel(item: SampleItem, total: int) -> None:
                 st.rerun()
 
 
+def as_label(value: Any) -> str:
+    text = str(value).strip().lower()
+    if text in {"1", "1.0", "true", "o", "yes", "y"}:
+        return "1"
+    if text in {"0", "0.0", "false", "x", "no", "n", "", "nan"}:
+        return "0"
+    return str(value)
+
+
+def render_llm_panel(item: SampleItem) -> None:
+    info = item.llm_info or {}
+    if not info:
+        return
+
+    st.markdown("### LLM 검수 정보")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("LLM change", info.get("llm_change", "-"))
+    m2.metric("confidence", info.get("confidence", "-"))
+    m3.metric("mismatch", info.get("label_mismatch", "-"))
+    m4.metric("review", info.get("review_required_final", "-"))
+
+    if info.get("review_reasons"):
+        st.warning(f"검수 사유: {info.get('review_reasons')}")
+    if info.get("detail_mismatch_keys"):
+        st.info(f"세부 불일치 라벨: {info.get('detail_mismatch_keys')}")
+    if info.get("error"):
+        st.error(f"LLM 오류: {info.get('error')}")
+
+    compare_rows = []
+    for llm_key, display_key in LABEL_COMPARE_KEYS:
+        original_key = f"original_{llm_key}"
+        if original_key in info or llm_key in info:
+            compare_rows.append(
+                {
+                    "label": display_key,
+                    "original": as_label(info.get(original_key, "")),
+                    "llm": as_label(info.get(llm_key, "")),
+                }
+            )
+    if compare_rows:
+        st.dataframe(compare_rows, use_container_width=True, hide_index=True)
+
+    if info.get("reason_ko") or info.get("reason_en"):
+        with st.expander("LLM 판단 근거", expanded=True):
+            if info.get("reason_ko"):
+                st.markdown(f"**KO**: {info.get('reason_ko')}")
+            if info.get("reason_en"):
+                st.markdown(f"**EN**: {info.get('reason_en')}")
+
+    with st.expander("CSV 원본 정보", expanded=False):
+        st.json(info)
+
+
 def main() -> None:
     init_state()
     render_sidebar()
 
     st.title("항공영상 학습데이터 검수툴")
-    st.caption("dataset/errors의 *_combined.jpg와 *_combined.json을 기준으로 라벨을 확인하고 수정합니다.")
+    st.caption("폴더 전체 검수 또는 LLM이 생성한 review_list.csv 기반 검수를 지원합니다.")
 
     item = current_item()
     items = st.session_state.get("items", [])
 
     if item is None:
-        st.info("왼쪽 사이드바에서 데이터 루트 경로, 데이터 종류, 분할을 선택하고 Load를 누르세요.")
+        st.info("왼쪽 사이드바에서 검수 모드를 선택하고 데이터를 불러오세요.")
         st.code(r"C:\Users\rlarj\Desktop\산학과제\dataset_sample")
         return
 
@@ -297,10 +425,15 @@ def main() -> None:
         f"error_type={item.error_type or '-'} | json={item.json_path}"
     )
 
-    if item.source == "errors":
+    if st.session_state.get("loaded_mode") == "review_csv":
+        st.info(f"현재 모드: LLM 검수 대상 CSV / {st.session_state.get('loaded_review_csv')}", icon="📄")
+    elif item.source == "errors":
         st.warning("현재 파일은 errors 폴더의 오탐/미탐 검수 대상입니다.", icon="⚠️")
     else:
         st.success("현재 파일은 dataset 폴더의 일반 학습데이터입니다.", icon="✅")
+
+    if item.llm_info:
+        render_llm_panel(item)
 
     left_col, right_col = st.columns([3.2, 1.25], gap="large")
 
