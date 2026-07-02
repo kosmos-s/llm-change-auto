@@ -1,0 +1,19 @@
+# 로컬 PC 예시
+local_dataset_sample: "D:/ECTNFS_WSU/2026/dataset_sample"
+
+# Jupyter/NAS 마운트 예시
+jupyter_dataset_sample: "/home/jovyan/bizdata/ECTNFS_WSU/2026/dataset_sample"
+
+# 기본 입출력 경로
+default_dataset_root: "D:/ECTNFS_WSU/2026/dataset_sample"
+output_dir: "outputs"
+log_dir: "logs"
+
+# 스캔 대상 하위 폴더
+scan_targets:
+  - "dataset/train"
+  - "dataset/val"
+  - "dataset/test"
+  - "errors/train"
+  - "errors/val"
+  - "errors/test"
