@@ -78,17 +78,23 @@ def image_path_for_view(item: SampleItem, view_mode: str) -> Path:
     return item.combined_path
 
 
+def widget_key(item: SampleItem, name: str) -> str:
+    return f"{item.split}_{item.image_id}_{name}"
+
+
 def render_sidebar() -> None:
     st.sidebar.title("데이터 불러오기")
     default_root = str(Path.home() / "Desktop" / "산학과제" / "dataset_sample")
     root = st.sidebar.text_input("dataset_sample 경로", value=st.session_state.get("loaded_root") or default_root)
-    split = st.sidebar.selectbox("분할 선택", ["test", "train", "val", "all"], index=0)
+    split_options = ["test", "train", "val", "all"]
+    split = st.sidebar.selectbox("분할 선택", split_options, index=split_options.index(st.session_state.get("loaded_split", "test")))
 
     if st.sidebar.button("Load Directory", use_container_width=True):
         root_path = Path(root)
         if not root_path.exists():
             st.sidebar.error(f"경로가 없습니다: {root_path}")
         else:
+            st.cache_data.clear()
             st.session_state["items"] = load_items(str(root_path), split)
             st.session_state["index"] = 0
             st.session_state["loaded_root"] = str(root_path)
@@ -120,64 +126,91 @@ def render_navigation(total: int) -> None:
             st.session_state["index"] += 1
             st.rerun()
     with col3:
-        jump_value = st.number_input("Jump", min_value=1, max_value=max(total, 1), value=st.session_state["index"] + 1)
+        jump_value = st.number_input(
+            "Jump",
+            min_value=1,
+            max_value=max(total, 1),
+            value=st.session_state["index"] + 1,
+            key="jump_value",
+        )
     with col4:
         if st.button("Jump", use_container_width=True):
             st.session_state["index"] = int(jump_value) - 1
             st.rerun()
 
 
-def render_label_panel(item: SampleItem) -> None:
+def read_current_ui_state(item: SampleItem) -> dict[str, object]:
+    return {
+        "Artifact": st.session_state.get(widget_key(item, "Artifact"), False),
+        "arti_bu": st.session_state.get(widget_key(item, "arti_bu"), False),
+        "arti_bu_t": st.session_state.get(widget_key(item, "arti_bu_t"), False),
+        "arti_binil": st.session_state.get(widget_key(item, "arti_binil"), False),
+        "arti_road": st.session_state.get(widget_key(item, "arti_road"), False),
+        "arti_roa_m": st.session_state.get(widget_key(item, "arti_roa_m"), False),
+        "arti_other": st.session_state.get(widget_key(item, "arti_other"), False),
+        "Tree": st.session_state.get(widget_key(item, "Tree"), False),
+        "forest": st.session_state.get(widget_key(item, "forest"), False),
+        "farmland": st.session_state.get(widget_key(item, "farmland"), False),
+        "water": st.session_state.get(widget_key(item, "water"), False),
+        "reason": st.session_state.get(widget_key(item, "reason"), ""),
+        "reason_ko": st.session_state.get(widget_key(item, "reason_ko"), ""),
+    }
+
+
+def save_current_item(item: SampleItem, data: dict, save_mode: str) -> Path:
+    new_state = read_current_ui_state(item)
+    updated = update_label_json(data, new_state)
+    if save_mode == "원본 JSON 덮어쓰기":
+        save_path = item.json_path
+    else:
+        save_dir = PROJECT_ROOT / "outputs" / "reviewed_json" / item.split
+        save_path = save_dir / item.json_path.name
+    save_json(save_path, updated)
+    return save_path
+
+
+def render_label_panel(item: SampleItem, total: int) -> None:
     data = load_json(item.json_path)
     state = get_label_state(data)
 
     st.subheader("타겟 클래스 / 세부 클래스")
 
-    artifact = st.checkbox("Artifact", value=bool(state["Artifact"]), help=LABEL_HELP["Artifact"])
+    st.checkbox("Artifact", value=bool(state["Artifact"]), help=LABEL_HELP["Artifact"], key=widget_key(item, "Artifact"))
     st.markdown("**Artifact Detail**")
-    arti_bu = st.checkbox("arti_bu", value=bool(state["arti_bu"]), help=LABEL_HELP["arti_bu"])
-    arti_bu_t = st.checkbox("arti_bu_t", value=bool(state["arti_bu_t"]), help=LABEL_HELP["arti_bu_t"])
-    arti_binil = st.checkbox("arti_binil", value=bool(state["arti_binil"]), help=LABEL_HELP["arti_binil"])
-    arti_road = st.checkbox("arti_road", value=bool(state["arti_road"]), help=LABEL_HELP["arti_road"])
-    arti_roa_m = st.checkbox("arti_roa_m", value=bool(state["arti_roa_m"]), help=LABEL_HELP["arti_roa_m"])
-    arti_other = st.checkbox("arti_other", value=bool(state["arti_other"]), help=LABEL_HELP["arti_other"])
+    st.checkbox("arti_bu", value=bool(state["arti_bu"]), help=LABEL_HELP["arti_bu"], key=widget_key(item, "arti_bu"))
+    st.checkbox("arti_bu_t", value=bool(state["arti_bu_t"]), help=LABEL_HELP["arti_bu_t"], key=widget_key(item, "arti_bu_t"))
+    st.checkbox("arti_binil", value=bool(state["arti_binil"]), help=LABEL_HELP["arti_binil"], key=widget_key(item, "arti_binil"))
+    st.checkbox("arti_road", value=bool(state["arti_road"]), help=LABEL_HELP["arti_road"], key=widget_key(item, "arti_road"))
+    st.checkbox("arti_roa_m", value=bool(state["arti_roa_m"]), help=LABEL_HELP["arti_roa_m"], key=widget_key(item, "arti_roa_m"))
+    st.checkbox("arti_other", value=bool(state["arti_other"]), help=LABEL_HELP["arti_other"], key=widget_key(item, "arti_other"))
 
     st.divider()
-    tree = st.checkbox("Tree", value=bool(state["Tree"]), help=LABEL_HELP["Tree"])
-    forest = st.checkbox("forest", value=bool(state["forest"]), help=LABEL_HELP["forest"])
-    farmland = st.checkbox("farmland", value=bool(state["farmland"]), help=LABEL_HELP["farmland"])
-    water = st.checkbox("water", value=bool(state["water"]), help=LABEL_HELP["water"])
+    st.checkbox("Tree", value=bool(state["Tree"]), help=LABEL_HELP["Tree"], key=widget_key(item, "Tree"))
+    st.checkbox("forest", value=bool(state["forest"]), help=LABEL_HELP["forest"], key=widget_key(item, "forest"))
+    st.checkbox("farmland", value=bool(state["farmland"]), help=LABEL_HELP["farmland"], key=widget_key(item, "farmland"))
+    st.checkbox("water", value=bool(state["water"]), help=LABEL_HELP["water"], key=widget_key(item, "water"))
 
     st.divider()
-    reason = st.text_area("reason", value=str(state["reason"]), height=110)
-    reason_ko = st.text_area("reason (KO)", value=str(state["reason_ko"]), height=110)
+    st.text_area("reason", value=str(state["reason"]), height=110, key=widget_key(item, "reason"))
+    st.text_area("reason (KO)", value=str(state["reason_ko"]), height=110, key=widget_key(item, "reason_ko"))
 
-    new_state = {
-        "Artifact": artifact,
-        "arti_bu": arti_bu,
-        "arti_bu_t": arti_bu_t,
-        "arti_binil": arti_binil,
-        "arti_road": arti_road,
-        "arti_roa_m": arti_roa_m,
-        "arti_other": arti_other,
-        "Tree": tree,
-        "forest": forest,
-        "farmland": farmland,
-        "water": water,
-        "reason": reason,
-        "reason_ko": reason_ko,
-    }
+    detail_keys = ["arti_bu", "arti_bu_t", "arti_binil", "arti_road", "arti_roa_m", "arti_other"]
+    if any(st.session_state.get(widget_key(item, key), False) for key in detail_keys) and not st.session_state.get(widget_key(item, "Artifact"), False):
+        st.info("세부 인공물 라벨이 체크되어 저장 시 Artifact가 자동으로 체크됩니다.")
 
-    save_mode = st.radio("저장 위치", ["원본 JSON 덮어쓰기", "reviewed_json 폴더에 저장"], horizontal=False)
-    if st.button("Save Changes", type="primary", use_container_width=True):
-        updated = update_label_json(data, new_state)
-        if save_mode == "원본 JSON 덮어쓰기":
-            save_path = item.json_path
-        else:
-            save_dir = PROJECT_ROOT / "outputs" / "reviewed_json" / item.split
-            save_path = save_dir / item.json_path.name
-        save_json(save_path, updated)
-        st.success(f"저장 완료: {save_path}")
+    save_mode = st.radio("저장 위치", ["reviewed_json 폴더에 저장", "원본 JSON 덮어쓰기"], horizontal=False)
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Save Changes", type="primary", use_container_width=True):
+            save_path = save_current_item(item, data, save_mode)
+            st.success(f"저장 완료: {save_path}")
+    with col2:
+        if st.button("Save & Next", use_container_width=True):
+            save_path = save_current_item(item, data, save_mode)
+            st.success(f"저장 완료: {save_path}")
+            if st.session_state["index"] < total - 1:
+                st.session_state["index"] += 1
+                st.rerun()
 
 
 def main() -> None:
@@ -207,7 +240,7 @@ def main() -> None:
         render_navigation(total)
 
     with right_col:
-        render_label_panel(item)
+        render_label_panel(item, total)
 
 
 if __name__ == "__main__":
