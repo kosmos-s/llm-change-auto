@@ -40,10 +40,16 @@ LABEL_HELP = {
     "water": "수계 변화",
 }
 
+SOURCE_LABELS = {
+    "dataset": "dataset - 일반 학습데이터",
+    "errors": "errors - 오탐/미탐 검수데이터",
+    "both": "both - dataset + errors",
+}
+
 
 @st.cache_data(show_spinner=False)
-def load_items(root: str, split: str) -> list[SampleItem]:
-    return find_combined_images(root, split)
+def load_items(root: str, split: str, source: str) -> list[SampleItem]:
+    return find_combined_images(root, split, source)
 
 
 def init_state() -> None:
@@ -51,8 +57,10 @@ def init_state() -> None:
     st.session_state.setdefault("index", 0)
     st.session_state.setdefault("loaded_root", "")
     st.session_state.setdefault("loaded_split", "test")
+    st.session_state.setdefault("loaded_source", "dataset")
     st.session_state.setdefault("view_mode", "combined")
     st.session_state.setdefault("split_choice", "test")
+    st.session_state.setdefault("source_choice", "dataset")
 
 
 def clamp_index() -> None:
@@ -80,31 +88,42 @@ def image_path_for_view(item: SampleItem, view_mode: str) -> Path:
 
 
 def widget_key(item: SampleItem, name: str) -> str:
-    return f"{item.split}_{item.image_id}_{name}"
+    safe_folder = item.relative_folder.replace("/", "_").replace("\\", "_").replace(".", "root")
+    return f"{item.source}_{item.split}_{safe_folder}_{item.image_id}_{name}"
 
 
-def do_load(root: str, split: str) -> None:
+def do_load(root: str, split: str, source: str) -> None:
     root_path = Path(root)
     if not root_path.exists():
         st.sidebar.error(f"경로가 없습니다: {root_path}")
         return
 
     st.cache_data.clear()
-    st.session_state["items"] = load_items(str(root_path), split)
+    st.session_state["items"] = load_items(str(root_path), split, source)
     st.session_state["index"] = 0
     st.session_state["loaded_root"] = str(root_path)
     st.session_state["loaded_split"] = split
+    st.session_state["loaded_source"] = source
 
     if st.session_state["items"]:
-        st.sidebar.success(f"{len(st.session_state['items'])}개 파일 로드 완료")
+        st.sidebar.success(f"{SOURCE_LABELS.get(source, source)} / {split}: {len(st.session_state['items'])}개 로드 완료")
     else:
-        st.sidebar.warning("*_combined.jpg 파일을 찾지 못했습니다. dataset_sample 경로를 확인하세요.")
+        st.sidebar.warning("*_combined.jpg 파일을 찾지 못했습니다. 데이터 종류, 분할, 경로를 확인하세요.")
 
 
 def render_sidebar() -> None:
     st.sidebar.title("데이터 불러오기")
     default_root = str(Path.home() / "Desktop" / "산학과제" / "dataset_sample")
-    root = st.sidebar.text_input("dataset_sample 경로", value=st.session_state.get("loaded_root") or default_root)
+    root = st.sidebar.text_input("데이터 루트 경로", value=st.session_state.get("loaded_root") or default_root)
+
+    st.sidebar.caption("데이터 종류")
+    source = st.sidebar.radio(
+        "데이터 종류",
+        ["dataset", "errors", "both"],
+        format_func=lambda value: SOURCE_LABELS[value],
+        key="source_choice",
+        label_visibility="collapsed",
+    )
 
     st.sidebar.caption("분할 선택")
     split = st.sidebar.radio(
@@ -117,20 +136,22 @@ def render_sidebar() -> None:
     col1, col2 = st.sidebar.columns(2)
     with col1:
         if st.button("Load", use_container_width=True):
-            do_load(root, split)
+            do_load(root, split, source)
     with col2:
         if st.button("Reload", use_container_width=True):
-            do_load(root, split)
+            do_load(root, split, source)
 
-    if st.session_state.get("items") and (
-        str(Path(root)) == st.session_state.get("loaded_root")
-        and split != st.session_state.get("loaded_split")
-    ):
-        do_load(root, split)
+    already_loaded = bool(st.session_state.get("items"))
+    same_root = str(Path(root)) == st.session_state.get("loaded_root")
+    source_changed = source != st.session_state.get("loaded_source")
+    split_changed = split != st.session_state.get("loaded_split")
+    if already_loaded and same_root and (source_changed or split_changed):
+        do_load(root, split, source)
 
     if st.session_state.get("items"):
         st.sidebar.caption(
-            f"현재 로드: {st.session_state.get('loaded_split')} / "
+            f"현재 로드: {SOURCE_LABELS.get(st.session_state.get('loaded_source'), st.session_state.get('loaded_source'))} / "
+            f"{st.session_state.get('loaded_split')} / "
             f"{len(st.session_state.get('items', []))}개"
         )
 
@@ -193,7 +214,9 @@ def save_current_item(item: SampleItem, data: dict, save_mode: str) -> Path:
     if save_mode == "원본 JSON 덮어쓰기":
         save_path = item.json_path
     else:
-        save_dir = PROJECT_ROOT / "outputs" / "reviewed_json" / item.split
+        save_dir = PROJECT_ROOT / "outputs" / "reviewed_json" / item.source / item.split
+        if item.relative_folder != ".":
+            save_dir = save_dir / item.relative_folder
         save_path = save_dir / item.json_path.name
     save_json(save_path, updated)
     return save_path
@@ -248,19 +271,27 @@ def main() -> None:
     render_sidebar()
 
     st.title("항공영상 학습데이터 검수툴")
-    st.caption("dataset_sample의 *_combined.jpg와 *_combined.json을 기준으로 라벨을 확인하고 수정합니다.")
+    st.caption("dataset/errors의 *_combined.jpg와 *_combined.json을 기준으로 라벨을 확인하고 수정합니다.")
 
     item = current_item()
     items = st.session_state.get("items", [])
 
     if item is None:
-        st.info("왼쪽 사이드바에서 dataset_sample 경로를 입력하고 Load를 누르세요.")
+        st.info("왼쪽 사이드바에서 데이터 루트 경로, 데이터 종류, 분할을 선택하고 Load를 누르세요.")
         st.code(r"C:\Users\rlarj\Desktop\산학과제\dataset_sample")
         return
 
     total = len(items)
     st.markdown(f"**Loaded file [{st.session_state['index'] + 1}/{total}]**  `{item.image_id}`")
-    st.caption(f"split={item.split} | json={item.json_path}")
+    st.caption(
+        f"source={item.source} | split={item.split} | folder={item.relative_folder} | "
+        f"error_type={item.error_type or '-'} | json={item.json_path}"
+    )
+
+    if item.source == "errors":
+        st.warning("현재 파일은 errors 폴더의 오탐/미탐 검수 대상입니다.", icon="⚠️")
+    else:
+        st.success("현재 파일은 dataset 폴더의 일반 학습데이터입니다.", icon="✅")
 
     left_col, right_col = st.columns([3.2, 1.25], gap="large")
 
