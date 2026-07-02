@@ -11,11 +11,12 @@
 - 기존 JSON 라벨과 LLM 결과 비교
 - 육안검수 대상 CSV 생성
 - `review_list.csv` 기반 검수 대상만 보기
+- 결과 CSV와 `reviewed_json` 저장 현황 통계 확인
 - Streamlit 통합 UI 제공
 
 ---
 
-## 1. 현재 데이터 구조
+## 1. 데이터 구조
 
 권장 로컬 구조는 아래와 같습니다.
 
@@ -26,19 +27,11 @@
 │  │  ├─ train/
 │  │  ├─ val/
 │  │  └─ test/
-│  │
 │  └─ errors/
 │     ├─ train/
 │     ├─ val/
 │     └─ test/
-│
 └─ llm-change-auto/
-   ├─ app/
-   ├─ src/
-   ├─ prompts/
-   ├─ config/
-   ├─ outputs/
-   └─ docs/
 ```
 
 각 `train / val / test` 폴더 안에는 보통 아래 파일들이 들어 있습니다.
@@ -53,25 +46,19 @@
 `errors` 폴더는 오류 유형별 하위 폴더가 있을 수도 있습니다.
 
 ```text
-errors/
-└─ test/
-   ├─ artifact_fn_00/
-   ├─ artifact_fp_00/
-   └─ ...
+errors/test/artifact_fn_00/
+errors/test/artifact_fp_00/
 ```
 
 NAS 전체 데이터처럼 아래 구조도 지원합니다.
 
 ```text
-2026/
-└─ dataset/
-   ├─ train/
-   ├─ val/
-   ├─ test/
-   └─ errors/
-      ├─ train/
-      ├─ val/
-      └─ test/
+2026/dataset/train
+2026/dataset/val
+2026/dataset/test
+2026/dataset/errors/train
+2026/dataset/errors/val
+2026/dataset/errors/test
 ```
 
 ---
@@ -110,7 +97,7 @@ pip install -r requirements.txt
 
 ## 4. 통합 UI 실행
 
-이제 검수 UI와 LLM 자동화 UI를 하나의 Streamlit 앱에서 사용합니다.
+검수 UI, LLM 자동화 UI, 통계 UI를 하나의 Streamlit 앱에서 사용합니다.
 
 ### VS Code 실행
 
@@ -134,8 +121,9 @@ http://localhost:8501
 
 | 페이지 | 역할 |
 |---|---|
-| `검수 UI` | 이미지 확인, JSON 라벨 수정, reason 입력, LLM 검수 대상 CSV 확인 |
+| `검수 UI` | 이미지 확인, JSON 라벨 수정, LLM 검수 대상 CSV 확인 |
 | `LLM 자동화 UI` | 데이터 인덱스 생성, LLM 실행, 라벨 비교, 검수 목록 생성 |
+| `통계 UI` | CSV 결과와 `reviewed_json` 저장 현황 요약 |
 
 ---
 
@@ -144,8 +132,6 @@ http://localhost:8501
 검수 UI에는 두 가지 모드가 있습니다.
 
 ### 폴더 전체 검수
-
-폴더 기준으로 전체 데이터를 불러옵니다.
 
 - `dataset / errors / both` 선택
 - `test / train / val / all` 선택
@@ -163,7 +149,7 @@ LLM 자동화 UI에서 생성한 검수 대상 CSV만 불러옵니다.
 outputs/review_lists/dataset_test_10_review.csv
 ```
 
-이 모드에서는 CSV에 들어 있는 파일만 순서대로 보여주며, 화면에 아래 정보도 같이 표시합니다.
+이 모드에서는 CSV에 들어 있는 파일만 순서대로 보여주며, 아래 정보를 함께 표시합니다.
 
 - LLM change
 - confidence
@@ -195,7 +181,7 @@ outputs/review_lists/dataset_test_10_review.csv
 
 ## 6. LLM 자동화 UI 기능
 
-LLM 자동화 UI에서는 터미널 명령어로 하던 아래 과정을 버튼으로 실행합니다.
+LLM 자동화 UI에서는 아래 과정을 버튼으로 실행합니다.
 
 ```text
 데이터 인덱스 생성
@@ -229,7 +215,25 @@ outputs/review_lists/dataset_test_10_review.csv
 
 ---
 
-## 7. API Key 설정
+## 7. 통계 UI 기능
+
+통계 UI에서는 `outputs` 폴더의 결과를 요약합니다.
+
+확인 가능한 항목:
+
+- `dataset_index.csv` 개수
+- LLM 결과 CSV 요약
+- 비교 결과 CSV 요약
+- 검수 대상 CSV 요약
+- review_reasons별 개수
+- label_mismatch / detail_mismatch 개수
+- confidence 평균 및 low confidence 개수
+- 라벨별 original / llm 개수 비교
+- `outputs/reviewed_json` 저장 현황
+
+---
+
+## 8. API Key 설정
 
 LLM 자동화 실행 전 `.env.example`을 복사해서 `.env`를 만들고 API Key를 입력합니다.
 
@@ -247,7 +251,7 @@ OPENAI_API_KEY=your_api_key_here
 
 ---
 
-## 8. 현재 프로젝트 구조
+## 9. 현재 프로젝트 구조
 
 ```text
 llm-change-auto/
@@ -260,7 +264,8 @@ llm-change-auto/
 │  ├─ run_llm_pipeline.py         # 통합 UI 호환 실행 파일
 │  └─ pages/
 │     ├─ 1_검수_UI.py
-│     └─ 2_LLM_자동화_UI.py
+│     ├─ 2_LLM_자동화_UI.py
+│     └─ 3_통계_UI.py
 │
 ├─ src/
 │  ├─ dataset_loader.py           # 폴더 로드 + review_list.csv 로드
@@ -277,26 +282,11 @@ llm-change-auto/
 │  └─ metrics.py
 │
 ├─ prompts/
-│  ├─ prompt_v1_basic.txt
-│  ├─ prompt_v2_guideline.txt
-│  └─ prompt_v3_json_strict.txt
-│
 ├─ config/
-│  ├─ labels.yaml
-│  ├─ paths.yaml
-│  └─ model_config.yaml
-│
 ├─ outputs/
-│  ├─ llm_results/
-│  ├─ compare_results/
-│  ├─ review_lists/
-│  └─ reviewed_json/
-│
 ├─ docs/
 ├─ logs/
 ├─ .vscode/
-│  ├─ launch.json
-│  └─ settings.json
 ├─ .env.example
 ├─ .gitignore
 ├─ requirements.txt
@@ -305,7 +295,7 @@ llm-change-auto/
 
 ---
 
-## 9. 자주 생기는 문제
+## 10. 자주 생기는 문제
 
 ### PowerShell에서 가상환경 실행 오류
 
@@ -349,11 +339,12 @@ outputs/review_lists/dataset_test_10_review.csv
 
 ---
 
-## 10. 현재 구현 상태
+## 11. 현재 구현 상태
 
 - [x] 통합 Streamlit UI
 - [x] 검수 UI
 - [x] LLM 자동화 UI
+- [x] 통계 UI
 - [x] Ctrl+F5 통합 실행
 - [x] dataset/errors 구분 로드
 - [x] errors 하위 오류 유형 폴더 표시
@@ -366,5 +357,6 @@ outputs/review_lists/dataset_test_10_review.csv
 - [x] 검수 대상 CSV 생성
 - [x] 검수 UI에서 review_list.csv만 불러오기
 - [x] LLM 결과와 원본 라벨을 검수 UI에서 동시에 비교 표시
-- [ ] 검수 결과 통계 화면 추가
+- [x] 검수 결과 통계 화면 추가
 - [ ] reviewed_json 저장 결과를 원본/LLM 결과와 통계 비교
+- [ ] 프롬프트 성능 개선
