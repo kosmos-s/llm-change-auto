@@ -1,4 +1,4 @@
-"""Compare original label hints and LLM outputs."""
+"""Compare original JSON labels and LLM outputs."""
 
 from __future__ import annotations
 
@@ -21,30 +21,37 @@ LABEL_KEYS = [
 ]
 
 
-def label_hint_to_change(label: str) -> int:
-    label = str(label).lower()
-    if "no" in label and "change" in label:
+def as_int(value: object) -> int:
+    try:
+        return int(float(value))
+    except Exception:
         return 0
-    if "unchange" in label:
-        return 0
-    return 1
 
 
 def compare(input_csv: Path, output_csv: Path, confidence_threshold: float = 0.70) -> None:
     df = pd.read_csv(input_csv)
     rows = []
     for _, row in df.iterrows():
-        original_change = label_hint_to_change(row.get("original_label", ""))
-        llm_change = int(row.get("llm_change", 0) or 0)
+        original_change = as_int(row.get("original_change", 0))
+        llm_change = as_int(row.get("llm_change", 0))
         confidence = float(row.get("confidence", 0.0) or 0.0)
+
+        # 기존 JSON 라벨과 LLM 세부 라벨 비교
+        detail_mismatch_keys = []
+        for key in LABEL_KEYS:
+            original_value = as_int(row.get(f"original_{key}", row.get(key, 0)))
+            llm_value = as_int(row.get(key, 0))
+            if original_value != llm_value:
+                detail_mismatch_keys.append(key)
 
         mismatch = original_change != llm_change
         low_confidence = confidence < confidence_threshold
-        empty_class_when_change = llm_change == 1 and not any(int(row.get(k, 0) or 0) for k in LABEL_KEYS)
+        empty_class_when_change = llm_change == 1 and not any(as_int(row.get(k, 0)) for k in LABEL_KEYS)
 
         new_row = row.to_dict()
-        new_row["original_change"] = original_change
         new_row["label_mismatch"] = mismatch
+        new_row["detail_mismatch_keys"] = ",".join(detail_mismatch_keys)
+        new_row["detail_mismatch"] = bool(detail_mismatch_keys)
         new_row["low_confidence"] = low_confidence
         new_row["empty_class_when_change"] = empty_class_when_change
         new_row["review_required_final"] = bool(
