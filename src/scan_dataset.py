@@ -1,15 +1,39 @@
 """Dataset folder scanner.
 
-원본 이미지를 GitHub에 복사하지 않고, 이미지 경로 목록만 CSV로 저장한다.
+현재 데이터 구조에 맞춰 `*_combined.jpg`만 LLM 입력 대상으로 스캔한다.
+같은 이름의 `*_combined.json`, `*_left.jpg`, `*_right.jpg` 경로와 기존 라벨도 함께 읽는다.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
+from typing import Any
+
 import pandas as pd
 
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"}
+LABEL_KEYS = [
+    "arti",
+    "arti_bu",
+    "arti_bu_t",
+    "arti_binil",
+    "arti_road",
+    "arti_roa_m",
+    "arti_other",
+    "tree",
+    "fore",
+    "farm",
+    "water",
+]
+
+
+def ox_to_int(value: Any) -> int:
+    """Convert dataset label values such as o/x/1/0 to int."""
+    text = str(value).strip().lower()
+    if text in {"o", "1", "true", "yes", "y"}:
+        return 1
+    return 0
 
 
 def infer_split(path: Path) -> str:
@@ -29,30 +53,69 @@ def infer_group(path: Path) -> str:
     return "unknown"
 
 
-def infer_original_label(path: Path) -> str:
-    # errors/test/artifact_fn_00 같은 폴더명을 우선 라벨 힌트로 사용
-    parent = path.parent.name
-    if parent:
-        return parent
-    return "unknown"
+def read_label_json(json_path: Path) -> dict[str, Any]:
+    if not json_path.exists():
+        return {}
+    try:
+        return json.loads(json_path.read_text(encoding="utf-8"))
+    except UnicodeDecodeError:
+        return json.loads(json_path.read_text(encoding="cp949"))
+
+
+def normalize_labels(label_json: dict[str, Any]) -> dict[str, Any]:
+    artifact_detail = label_json.get("artifact_detail", {}) or {}
+
+    labels = {
+        "arti": ox_to_int(label_json.get("Artifact", "x")),
+        "tree": ox_to_int(label_json.get("Tree", "x")),
+        "fore": ox_to_int(label_json.get("forest", "x")),
+        "farm": ox_to_int(label_json.get("farmland", "x")),
+        "water": ox_to_int(label_json.get("water", "x")),
+        "arti_bu": ox_to_int(artifact_detail.get("arti_bu", "x")),
+        "arti_bu_t": ox_to_int(artifact_detail.get("arti_bu_t", "x")),
+        "arti_binil": ox_to_int(artifact_detail.get("arti_binil", "x")),
+        "arti_road": ox_to_int(artifact_detail.get("arti_road", "x")),
+        "arti_roa_m": ox_to_int(artifact_detail.get("arti_roa_m", "x")),
+        "arti_other": ox_to_int(artifact_detail.get("arti_other", "x")),
+    }
+
+    labels["original_change"] = 1 if any(labels[key] for key in LABEL_KEYS) else 0
+    labels["original_reason"] = str(label_json.get("reason", ""))
+    return labels
+
+
+def make_pair_paths(combined_path: Path) -> tuple[Path, Path, Path]:
+    stem = combined_path.stem.replace("_combined", "")
+    parent = combined_path.parent
+    left_path = parent / f"{stem}_left{combined_path.suffix}"
+    right_path = parent / f"{stem}_right{combined_path.suffix}"
+    json_path = parent / f"{stem}_combined.json"
+    return left_path, right_path, json_path
 
 
 def scan_dataset(root: Path) -> pd.DataFrame:
     rows = []
-    for file_path in root.rglob("*"):
-        if not file_path.is_file():
-            continue
-        if file_path.suffix.lower() not in IMAGE_EXTS:
-            continue
+    for combined_path in root.rglob("*_combined.jpg"):
+        left_path, right_path, json_path = make_pair_paths(combined_path)
+        label_json = read_label_json(json_path)
+        labels = normalize_labels(label_json)
+
         rows.append(
             {
-                "image_name": file_path.name,
-                "image_path": str(file_path),
-                "split": infer_split(file_path),
-                "group": infer_group(file_path),
-                "original_label": infer_original_label(file_path),
+                "image_id": combined_path.stem.replace("_combined", ""),
+                "image_name": combined_path.name,
+                "image_path": str(combined_path),
+                "left_image_path": str(left_path) if left_path.exists() else "",
+                "right_image_path": str(right_path) if right_path.exists() else "",
+                "json_path": str(json_path) if json_path.exists() else "",
+                "split": infer_split(combined_path),
+                "group": infer_group(combined_path),
+                **labels,
             }
         )
+
+    if not rows:
+        return pd.DataFrame()
     return pd.DataFrame(rows).sort_values(["group", "split", "image_name"])
 
 
