@@ -1,0 +1,19 @@
+provider: openai
+model: gpt-4o-mini
+max_tokens: 800
+temperature: 0.0
+
+review_policy:
+  confidence_threshold: 0.70
+  review_when_label_mismatch: true
+  review_when_low_confidence: true
+  review_when_uncertain_reason: true
+
+uncertain_keywords:
+  - "애매"
+  - "불명확"
+  - "그림자"
+  - "밝기"
+  - "촬영각"
+  - "계절"
+  - "해상도"
