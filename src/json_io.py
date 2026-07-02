@@ -6,14 +6,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-TOP_LABELS = {
-    "Artifact": "Artifact",
-    "Tree": "Tree",
-    "forest": "forest",
-    "farmland": "farmland",
-    "water": "water",
-}
-
 ARTIFACT_DETAIL_KEYS = [
     "arti_bu",
     "arti_bu_t",
@@ -82,16 +74,22 @@ def get_label_state(data: dict[str, Any]) -> dict[str, bool | str]:
 
 def update_label_json(data: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
     new_data = dict(data)
-    new_data["Artifact"] = bool_to_ox(bool(state.get("Artifact", False)))
+
+    detail = dict(new_data.get("artifact_detail", {}) or {})
+    has_artifact_detail = False
+    for key in ARTIFACT_DETAIL_KEYS:
+        checked = bool(state.get(key, False))
+        has_artifact_detail = has_artifact_detail or checked
+        detail[key] = bool_to_ox(checked)
+
+    # 세부 인공물 라벨이 하나라도 체크되면 상위 Artifact도 자동으로 o 처리한다.
+    artifact_checked = bool(state.get("Artifact", False)) or has_artifact_detail
+    new_data["Artifact"] = bool_to_ox(artifact_checked)
     new_data["Tree"] = bool_to_ox(bool(state.get("Tree", False)))
     new_data["forest"] = bool_to_ox(bool(state.get("forest", False)))
     new_data["farmland"] = bool_to_ox(bool(state.get("farmland", False)))
     new_data["water"] = bool_to_ox(bool(state.get("water", False)))
     new_data["reason"] = str(state.get("reason", ""))
     new_data["reason_ko"] = str(state.get("reason_ko", ""))
-
-    detail = dict(new_data.get("artifact_detail", {}) or {})
-    for key in ARTIFACT_DETAIL_KEYS:
-        detail[key] = bool_to_ox(bool(state.get(key, False)))
     new_data["artifact_detail"] = detail
     return new_data
