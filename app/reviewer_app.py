@@ -17,7 +17,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from dataset_loader import SampleItem, find_combined_images
-from json_io import get_label_state, load_json, save_json, update_label_json
+from json_io import get_label_state, has_korean_reason, load_json, save_json, update_label_json
 
 
 st.set_page_config(
@@ -225,6 +225,7 @@ def save_current_item(item: SampleItem, data: dict, save_mode: str) -> Path:
 def render_label_panel(item: SampleItem, total: int) -> None:
     data = load_json(item.json_path)
     state = get_label_state(data)
+    ko_missing = not has_korean_reason(data)
 
     st.subheader("타겟 클래스 / 세부 클래스")
 
@@ -245,7 +246,15 @@ def render_label_panel(item: SampleItem, total: int) -> None:
 
     st.divider()
     st.text_area("reason", value=str(state["reason"]), height=110, key=widget_key(item, "reason"))
-    st.text_area("reason (KO)", value=str(state["reason_ko"]), height=110, key=widget_key(item, "reason_ko"))
+    st.text_area(
+        "reason (KO)",
+        value=str(state["reason_ko"]),
+        height=110,
+        key=widget_key(item, "reason_ko"),
+        placeholder="기존 JSON에 한글 설명이 없으면 비어 있습니다. 검수 후 한글 설명을 입력하세요.",
+    )
+    if ko_missing:
+        st.caption("현재 JSON에 `reason_ko` 값이 없어 비어 있습니다. 입력 후 저장하면 `reason_ko` 필드가 새로 저장됩니다.")
 
     detail_keys = ["arti_bu", "arti_bu_t", "arti_binil", "arti_road", "arti_roa_m", "arti_other"]
     if any(st.session_state.get(widget_key(item, key), False) for key in detail_keys) and not st.session_state.get(widget_key(item, "Artifact"), False):
