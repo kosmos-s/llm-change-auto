@@ -52,6 +52,7 @@ def init_state() -> None:
     st.session_state.setdefault("loaded_root", "")
     st.session_state.setdefault("loaded_split", "test")
     st.session_state.setdefault("view_mode", "combined")
+    st.session_state.setdefault("split_choice", "test")
 
 
 def clamp_index() -> None:
@@ -82,27 +83,56 @@ def widget_key(item: SampleItem, name: str) -> str:
     return f"{item.split}_{item.image_id}_{name}"
 
 
+def do_load(root: str, split: str) -> None:
+    root_path = Path(root)
+    if not root_path.exists():
+        st.sidebar.error(f"경로가 없습니다: {root_path}")
+        return
+
+    st.cache_data.clear()
+    st.session_state["items"] = load_items(str(root_path), split)
+    st.session_state["index"] = 0
+    st.session_state["loaded_root"] = str(root_path)
+    st.session_state["loaded_split"] = split
+
+    if st.session_state["items"]:
+        st.sidebar.success(f"{len(st.session_state['items'])}개 파일 로드 완료")
+    else:
+        st.sidebar.warning("*_combined.jpg 파일을 찾지 못했습니다. dataset_sample 경로를 확인하세요.")
+
+
 def render_sidebar() -> None:
     st.sidebar.title("데이터 불러오기")
     default_root = str(Path.home() / "Desktop" / "산학과제" / "dataset_sample")
     root = st.sidebar.text_input("dataset_sample 경로", value=st.session_state.get("loaded_root") or default_root)
-    split_options = ["test", "train", "val", "all"]
-    split = st.sidebar.selectbox("분할 선택", split_options, index=split_options.index(st.session_state.get("loaded_split", "test")))
 
-    if st.sidebar.button("Load Directory", use_container_width=True):
-        root_path = Path(root)
-        if not root_path.exists():
-            st.sidebar.error(f"경로가 없습니다: {root_path}")
-        else:
-            st.cache_data.clear()
-            st.session_state["items"] = load_items(str(root_path), split)
-            st.session_state["index"] = 0
-            st.session_state["loaded_root"] = str(root_path)
-            st.session_state["loaded_split"] = split
-            if st.session_state["items"]:
-                st.sidebar.success(f"{len(st.session_state['items'])}개 파일 로드 완료")
-            else:
-                st.sidebar.warning("*_combined.jpg 파일을 찾지 못했습니다.")
+    st.sidebar.caption("분할 선택")
+    split = st.sidebar.radio(
+        "분할 선택",
+        ["test", "train", "val", "all"],
+        key="split_choice",
+        label_visibility="collapsed",
+    )
+
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        if st.button("Load", use_container_width=True):
+            do_load(root, split)
+    with col2:
+        if st.button("Reload", use_container_width=True):
+            do_load(root, split)
+
+    if st.session_state.get("items") and (
+        str(Path(root)) == st.session_state.get("loaded_root")
+        and split != st.session_state.get("loaded_split")
+    ):
+        do_load(root, split)
+
+    if st.session_state.get("items"):
+        st.sidebar.caption(
+            f"현재 로드: {st.session_state.get('loaded_split')} / "
+            f"{len(st.session_state.get('items', []))}개"
+        )
 
     st.sidebar.divider()
     st.sidebar.caption("이미지 보기")
@@ -224,7 +254,7 @@ def main() -> None:
     items = st.session_state.get("items", [])
 
     if item is None:
-        st.info("왼쪽 사이드바에서 dataset_sample 경로를 입력하고 Load Directory를 누르세요.")
+        st.info("왼쪽 사이드바에서 dataset_sample 경로를 입력하고 Load를 누르세요.")
         st.code(r"C:\Users\rlarj\Desktop\산학과제\dataset_sample")
         return
 
