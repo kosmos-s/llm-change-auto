@@ -1,0 +1,35 @@
+labels:
+  arti: "인공물 변화"
+  arti_bu: "건물 변화"
+  arti_bu_t: "건물 기울임 변화"
+  arti_binil: "온실/비닐하우스 변화"
+  arti_road: "도로 변화"
+  arti_roa_m: "도로 표식 변화"
+  arti_other: "기타 인공물 변화"
+  tree: "나무 변화"
+  fore: "산림 변화"
+  farm: "농경지 변화"
+  water: "수계 변화"
+
+output_fields:
+  - image_name
+  - split
+  - image_path
+  - original_label
+  - llm_change
+  - llm_class
+  - arti
+  - arti_bu
+  - arti_bu_t
+  - arti_binil
+  - arti_road
+  - arti_roa_m
+  - arti_other
+  - tree
+  - fore
+  - farm
+  - water
+  - reason_ko
+  - reason_en
+  - confidence
+  - review_required
