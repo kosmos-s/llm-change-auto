@@ -1,58 +1,279 @@
 # LLM Change Auto
 
-LLM/VLM 기반 항공영상 변경·변화탐지 학습데이터 자동 정제 도구입니다.
+우송대학교 산학협력 과제용 **LLM/VLM 기반 항공영상 변경·변화탐지 학습데이터 자동 정제 도구**입니다.
 
-이 저장소는 우송대학교 산학협력 과제에서 `dataset_sample` 및 NAS 데이터의 2시점 항공영상을 대상으로 다음 작업을 수행하기 위한 코드와 문서를 관리합니다.
+이 프로젝트는 `dataset_sample` 또는 NAS 데이터에 포함된 2시점 항공영상 쌍을 대상으로 다음 작업을 수행합니다.
 
-- 항공영상 데이터셋 폴더 스캔
-- LLM/VLM 프롬프트 기반 변화유무 판단
+- `*_combined.jpg`, `*_left.jpg`, `*_right.jpg`, `*_combined.json` 파일 구조 읽기
+- 기존 JSON 라벨 확인 및 수정
+- Streamlit 기반 육안검수 UI 제공
+- LLM/VLM 자동 판단 결과 생성
 - 기존 라벨과 LLM 결과 비교
-- 육안검수 대상 자동 선정
-- 결과 CSV/JSONL 저장
-- 정제 결과 및 성능 분석 보고서 작성
+- 육안검수 대상 CSV 생성
 
-## 중요 원칙
+---
+
+## 1. 현재 데이터 구조
+
+현재 데이터는 아래 형태를 기준으로 사용합니다.
+
+```text
+산학과제/
+├─ dataset_sample/
+│  └─ dataset/
+│     ├─ train/
+│     │  ├─ 00_xxxx_combined.jpg
+│     │  ├─ 00_xxxx_combined.json
+│     │  ├─ 00_xxxx_left.jpg
+│     │  └─ 00_xxxx_right.jpg
+│     ├─ val/
+│     └─ test/
+│
+└─ llm-change-auto/
+   ├─ app/
+   ├─ src/
+   ├─ prompts/
+   ├─ config/
+   ├─ outputs/
+   └─ docs/
+```
+
+LLM 입력과 검수 UI의 기본 이미지는 `*_combined.jpg`입니다.  
+`*_combined.json`은 기존 정답 라벨이며, UI에서 읽고 수정할 수 있습니다.
+
+---
+
+## 2. 중요 원칙
 
 원본 이미지 데이터는 GitHub에 업로드하지 않습니다.
 
 - 원본 데이터는 NAS 또는 로컬 데이터 폴더에서만 읽습니다.
-- GitHub에는 코드, 프롬프트, 설정 파일, 문서, 결과 CSV 샘플만 저장합니다.
+- GitHub에는 코드, 프롬프트, 설정 파일, 문서만 저장합니다.
 - `.env` 파일과 API Key는 절대 커밋하지 않습니다.
+- 처음 검수할 때는 원본 JSON 덮어쓰기보다 `reviewed_json 폴더에 저장` 방식을 권장합니다.
 
-## 기본 작업 흐름
+---
+
+## 3. 설치 방법
+
+VS Code에서 `llm-change-auto` 폴더를 엽니다.
+
+```powershell
+cd "C:\Users\rlarj\Desktop\산학과제\llm-change-auto"
+py -m venv .venv
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+이미 가상환경을 만든 적이 있으면 아래만 다시 실행하면 됩니다.
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+---
+
+## 4. Streamlit 검수 UI 실행
+
+```powershell
+streamlit run app\reviewer_app.py
+```
+
+브라우저가 열리면 왼쪽 사이드바에 `dataset_sample` 경로를 입력합니다.
 
 ```text
-1. dataset_sample 폴더 다운로드
-2. 데이터셋 이미지 경로 목록 생성
-3. 10~50개 샘플로 LLM 자동판별 테스트
-4. 기존 라벨과 LLM 결과 비교
-5. 불일치/저확신도 샘플을 육안검수 대상으로 저장
-6. 검수 결과를 정제 데이터로 반영
-7. 전체 dataset으로 확장
+C:\Users\rlarj\Desktop\산학과제\dataset_sample
 ```
 
-## 추천 실행 순서
+그 다음 `Load Directory` 버튼을 누릅니다.
 
-```bash
-pip install -r requirements.txt
-python src/scan_dataset.py --root "D:/ECTNFS_WSU/2026/dataset_sample"
-python src/run_llm_labeling.py --input outputs/dataset_index.csv --limit 10
-python src/compare_labels.py --llm outputs/llm_results/llm_results.csv
-python src/make_review_list.py --compare outputs/compare_results/compare_results.csv
+### UI 기능
+
+- `test / train / val / all` 선택
+- `combined / left / right` 이미지 전환
+- 체크박스로 라벨 수정
+- `reason`, `reason (KO)` 수정
+- `Previous File`, `Next File`, `Jump` 이동
+- `Save Changes` 저장
+- `Save & Next` 저장 후 다음 파일 이동
+
+### 저장 방식
+
+| 저장 방식 | 설명 |
+|---|---|
+| `reviewed_json 폴더에 저장` | 원본 JSON은 그대로 두고 `outputs/reviewed_json/{split}`에 저장 |
+| `원본 JSON 덮어쓰기` | 기존 `*_combined.json` 파일을 바로 수정 |
+
+처음에는 안전하게 `reviewed_json 폴더에 저장`을 사용하세요.
+
+---
+
+## 5. 데이터 인덱스 생성
+
+검수 UI와 별도로 전체 데이터 목록 CSV를 만들 수 있습니다.
+
+```powershell
+python src\scan_dataset.py --root "C:\Users\rlarj\Desktop\산학과제\dataset_sample"
 ```
 
-## 폴더 구조
+성공하면 아래 파일이 생성됩니다.
+
+```text
+outputs/dataset_index.csv
+```
+
+이 CSV에는 다음 정보가 저장됩니다.
+
+- image_id
+- combined 이미지 경로
+- left/right 이미지 경로
+- json 경로
+- train/val/test 구분
+- 기존 JSON 라벨
+- 기존 reason
+
+---
+
+## 6. LLM 자동 라벨링 실행
+
+`.env.example`을 복사해서 `.env`를 만들고 API Key를 입력합니다.
+
+```powershell
+copy .env.example .env
+```
+
+`.env` 예시:
+
+```text
+OPENAI_API_KEY=your_api_key_here
+```
+
+10장만 테스트하려면 아래처럼 실행합니다.
+
+```powershell
+python src\run_llm_labeling.py --input outputs\dataset_index.csv --limit 10
+```
+
+결과 파일:
+
+```text
+outputs/llm_results/llm_results.csv
+```
+
+---
+
+## 7. 기존 라벨과 LLM 결과 비교
+
+```powershell
+python src\compare_labels.py --llm outputs\llm_results\llm_results.csv
+```
+
+결과 파일:
+
+```text
+outputs/compare_results/compare_results.csv
+```
+
+육안검수 대상만 따로 만들려면:
+
+```powershell
+python src\make_review_list.py --compare outputs\compare_results\compare_results.csv
+```
+
+결과 파일:
+
+```text
+outputs/review_lists/review_required.csv
+```
+
+---
+
+## 8. 폴더 구조
 
 ```text
 llm-change-auto/
+├─ app/
+│  └─ reviewer_app.py
+│
 ├─ config/
+│  ├─ labels.yaml
+│  ├─ paths.yaml
+│  └─ model_config.yaml
+│
 ├─ prompts/
-├─ notebooks/
+│  ├─ prompt_v1_basic.txt
+│  ├─ prompt_v2_guideline.txt
+│  └─ prompt_v3_json_strict.txt
+│
 ├─ src/
-├─ data/
+│  ├─ dataset_loader.py
+│  ├─ json_io.py
+│  ├─ scan_dataset.py
+│  ├─ image_utils.py
+│  ├─ llm_client.py
+│  ├─ prompt_builder.py
+│  ├─ parse_llm_result.py
+│  ├─ run_llm_labeling.py
+│  ├─ compare_labels.py
+│  ├─ make_review_list.py
+│  └─ metrics.py
+│
 ├─ outputs/
+│  ├─ llm_results/
+│  ├─ compare_results/
+│  ├─ review_lists/
+│  └─ reviewed_json/
+│
 ├─ logs/
-└─ docs/
+├─ docs/
+├─ .env.example
+├─ .gitignore
+├─ requirements.txt
+└─ README.md
 ```
 
-자세한 내용은 `docs/folder_structure.md`를 참고하세요.
+---
+
+## 9. 자주 생기는 문제
+
+### PowerShell에서 가상환경 실행 오류
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
+
+### streamlit 명령어를 찾을 수 없음
+
+```powershell
+pip install -r requirements.txt
+```
+
+### Load Directory를 눌렀는데 파일이 안 나옴
+
+경로가 `dataset_sample`까지 맞는지 확인하세요.
+
+```text
+올바른 예: C:\Users\rlarj\Desktop\산학과제\dataset_sample
+잘못된 예: C:\Users\rlarj\Desktop\산학과제\dataset_sample\dataset\test
+```
+
+앱에서 `test/train/val`은 사이드바에서 선택합니다.
+
+---
+
+## 10. 현재 구현 상태
+
+- [x] dataset_sample 구조 인식
+- [x] combined/left/right 이미지 연결
+- [x] JSON 라벨 읽기
+- [x] Streamlit 검수 UI
+- [x] 수정 라벨 저장
+- [x] 데이터셋 CSV 스캔
+- [x] LLM 결과 CSV 저장 구조
+- [x] 기존 라벨과 LLM 결과 비교 구조
+- [ ] LLM 프롬프트 성능 개선
+- [ ] 검수 결과 통계 화면 추가
+- [ ] LLM 결과와 원본 라벨을 UI에서 동시에 비교하는 기능 추가
