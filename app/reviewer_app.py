@@ -131,7 +131,7 @@ def render_navigation(total: int) -> None:
             min_value=1,
             max_value=max(total, 1),
             value=st.session_state["index"] + 1,
-            key="jump_value",
+            key=f"jump_value_{total}_{st.session_state['index']}",
         )
     with col4:
         if st.button("Jump", use_container_width=True):
