@@ -2,37 +2,13 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "검수 UI 실행 (Streamlit)",
+      "name": "통합 UI 실행 (Streamlit)",
       "type": "debugpy",
       "request": "launch",
       "module": "streamlit",
       "args": [
         "run",
-        "app/reviewer_app.py"
-      ],
-      "console": "integratedTerminal",
-      "justMyCode": true
-    },
-    {
-      "name": "LLM 자동화 UI 실행 (Streamlit)",
-      "type": "debugpy",
-      "request": "launch",
-      "module": "streamlit",
-      "args": [
-        "run",
-        "app/llm_pipeline_app.py"
-      ],
-      "console": "integratedTerminal",
-      "justMyCode": true
-    },
-    {
-      "name": "데이터 스캔 실행",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "${workspaceFolder}/src/scan_dataset.py",
-      "args": [
-        "--root",
-        "${workspaceFolder}/../dataset_sample"
+        "app/main_app.py"
       ],
       "console": "integratedTerminal",
       "justMyCode": true
