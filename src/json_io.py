@@ -15,6 +15,8 @@ ARTIFACT_DETAIL_KEYS = [
     "arti_other",
 ]
 
+REASON_KO_KEYS = ["reason_ko", "reason_KO", "reasonKo", "reason_kor", "reasonKor", "reason_kr"]
+
 
 def bool_to_ox(value: bool) -> str:
     return "o" if value else "x"
@@ -22,6 +24,18 @@ def bool_to_ox(value: bool) -> str:
 
 def ox_to_bool(value: Any) -> bool:
     return str(value).strip().lower() in {"o", "1", "true", "yes", "y"}
+
+
+def first_text(data: dict[str, Any], keys: list[str], default: str = "") -> str:
+    for key in keys:
+        value = data.get(key)
+        if value is not None and str(value).strip():
+            return str(value)
+    return default
+
+
+def has_korean_reason(data: dict[str, Any]) -> bool:
+    return bool(first_text(data, REASON_KO_KEYS, ""))
 
 
 def load_json(path: str | Path) -> dict[str, Any]:
@@ -67,8 +81,8 @@ def get_label_state(data: dict[str, Any]) -> dict[str, bool | str]:
         "arti_road": ox_to_bool(artifact_detail.get("arti_road", "x")),
         "arti_roa_m": ox_to_bool(artifact_detail.get("arti_roa_m", "x")),
         "arti_other": ox_to_bool(artifact_detail.get("arti_other", "x")),
-        "reason": str(data.get("reason", "")),
-        "reason_ko": str(data.get("reason_ko", "")),
+        "reason": first_text(data, ["reason"], ""),
+        "reason_ko": first_text(data, REASON_KO_KEYS, ""),
     }
 
 
