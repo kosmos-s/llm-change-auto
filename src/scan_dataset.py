@@ -65,7 +65,7 @@ def read_label_json(json_path: Path) -> dict[str, Any]:
 def normalize_labels(label_json: dict[str, Any]) -> dict[str, Any]:
     artifact_detail = label_json.get("artifact_detail", {}) or {}
 
-    labels = {
+    original = {
         "arti": ox_to_int(label_json.get("Artifact", "x")),
         "tree": ox_to_int(label_json.get("Tree", "x")),
         "fore": ox_to_int(label_json.get("forest", "x")),
@@ -79,7 +79,8 @@ def normalize_labels(label_json: dict[str, Any]) -> dict[str, Any]:
         "arti_other": ox_to_int(artifact_detail.get("arti_other", "x")),
     }
 
-    labels["original_change"] = 1 if any(labels[key] for key in LABEL_KEYS) else 0
+    labels = {f"original_{key}": value for key, value in original.items()}
+    labels["original_change"] = 1 if any(original[key] for key in LABEL_KEYS) else 0
     labels["original_reason"] = str(label_json.get("reason", ""))
     return labels
 
