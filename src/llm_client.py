@@ -1,21 +1,64 @@
-"""LLM/VLM client wrapper.
+"""OpenAI vision client for aerial-image change detection.
 
-OpenAI와 Gemini를 모두 지원한다.
-API Key는 .env에 저장하고 GitHub에는 올리지 않는다.
+The API key is loaded only from OPENAI_API_KEY in the local environment.
+It is never accepted from UI input or written to result files.
 """
 
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
-import requests
 from dotenv import load_dotenv
 
 from image_utils import image_to_base64
 
 
 load_dotenv()
+
+RESULT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "change": {"type": "integer", "enum": [0, 1]},
+        "class": {"type": "string"},
+        "arti": {"type": "integer", "enum": [0, 1]},
+        "arti_bu": {"type": "integer", "enum": [0, 1]},
+        "arti_bu_t": {"type": "integer", "enum": [0, 1]},
+        "arti_binil": {"type": "integer", "enum": [0, 1]},
+        "arti_road": {"type": "integer", "enum": [0, 1]},
+        "arti_roa_m": {"type": "integer", "enum": [0, 1]},
+        "arti_other": {"type": "integer", "enum": [0, 1]},
+        "tree": {"type": "integer", "enum": [0, 1]},
+        "fore": {"type": "integer", "enum": [0, 1]},
+        "farm": {"type": "integer", "enum": [0, 1]},
+        "water": {"type": "integer", "enum": [0, 1]},
+        "reason_ko": {"type": "string"},
+        "reason_en": {"type": "string"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "review_required": {"type": "boolean"},
+    },
+    "required": [
+        "change",
+        "class",
+        "arti",
+        "arti_bu",
+        "arti_bu_t",
+        "arti_binil",
+        "arti_road",
+        "arti_roa_m",
+        "arti_other",
+        "tree",
+        "fore",
+        "farm",
+        "water",
+        "reason_ko",
+        "reason_en",
+        "confidence",
+        "review_required",
+    ],
+    "additionalProperties": False,
+}
 
 
 def get_mime_type(image_path: Path) -> str:
@@ -29,74 +72,33 @@ def get_mime_type(image_path: Path) -> str:
     return "image/jpeg"
 
 
-def ask_vision(image_path: str | Path, prompt: str, model: str, provider: str = "gemini") -> str:
-    provider = provider.lower().strip()
-    if provider == "gemini":
-        return ask_gemini_vision(image_path, prompt, model=model)
-    if provider == "openai":
-        return ask_openai_vision(image_path, prompt, model=model)
-    raise ValueError(f"지원하지 않는 provider입니다: {provider}")
+def sanitize_error_message(error: Exception | str) -> str:
+    """Remove API-key-shaped text before saving or displaying an error."""
+    message = str(error)
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    if api_key:
+        message = message.replace(api_key, "[REDACTED_API_KEY]")
 
-
-def ask_gemini_vision(image_path: str | Path, prompt: str, model: str = "gemini-2.5-flash") -> str:
-    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY가 설정되지 않았습니다. .env 파일을 확인하세요.")
-
-    image_path = Path(image_path)
-    if not image_path.exists():
-        raise FileNotFoundError(f"이미지 파일을 찾을 수 없습니다: {image_path}")
-
-    image_b64 = image_to_base64(image_path)
-    mime = get_mime_type(image_path)
-    timeout_sec = int(os.getenv("GEMINI_TIMEOUT", "60"))
-
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    payload = {
-        "contents": [
-            {
-                "role": "user",
-                "parts": [
-                    {"text": prompt},
-                    {
-                        "inline_data": {
-                            "mime_type": mime,
-                            "data": image_b64,
-                        }
-                    },
-                ],
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0,
-            "response_mime_type": "application/json",
-        },
-    }
-    response = requests.post(
-        url,
-        params={"key": api_key},
-        json=payload,
-        timeout=timeout_sec,
+    message = re.sub(
+        r"(?i)(?:sk|key)_[a-z0-9_-]{6,}",
+        "[REDACTED_API_KEY]",
+        message,
     )
-    if response.status_code >= 400:
-        raise RuntimeError(f"Gemini API 오류 {response.status_code}: {response.text[:1000]}")
-
-    data = response.json()
-    candidates = data.get("candidates", [])
-    if not candidates:
-        raise RuntimeError(f"Gemini 응답에 candidates가 없습니다: {data}")
-
-    parts = candidates[0].get("content", {}).get("parts", [])
-    texts = [part.get("text", "") for part in parts if part.get("text")]
-    if not texts:
-        raise RuntimeError(f"Gemini 응답에 text가 없습니다: {data}")
-    return "\n".join(texts)
+    message = re.sub(
+        r"(?i)OPENAI_API_KEY\s*=\s*\S+",
+        "OPENAI_API_KEY=[REDACTED]",
+        message,
+    )
+    return message
 
 
-def ask_openai_vision(image_path: str | Path, prompt: str, model: str = "gpt-4o-mini") -> str:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY가 설정되지 않았습니다. .env 파일을 확인하세요.")
+def ask_openai_vision(
+    image_path: str | Path,
+    prompt: str,
+    model: str = "gpt-4o-mini",
+) -> str:
+    if not os.getenv("OPENAI_API_KEY"):
+        raise RuntimeError("OPENAI_API_KEY가 설정되지 않았습니다. 로컬 .env 파일을 확인하세요.")
 
     image_path = Path(image_path)
     if not image_path.exists():
@@ -105,30 +107,45 @@ def ask_openai_vision(image_path: str | Path, prompt: str, model: str = "gpt-4o-
     try:
         from openai import OpenAI
     except ImportError as exc:
-        raise RuntimeError("openai가 설치되지 않았습니다. pip install -r requirements.txt를 실행하세요.") from exc
+        raise RuntimeError(
+            "openai 패키지가 설치되지 않았습니다. pip install -r requirements.txt를 실행하세요."
+        ) from exc
 
     image_b64 = image_to_base64(image_path)
-    mime = get_mime_type(image_path)
+    mime_type = get_mime_type(image_path)
+    timeout_seconds = float(os.getenv("OPENAI_TIMEOUT", "60"))
 
-    client = OpenAI(api_key=api_key)
-    response = client.chat.completions.create(
+    # OpenAI SDK reads OPENAI_API_KEY directly from the environment.
+    client = OpenAI(timeout=timeout_seconds, max_retries=2)
+    response = client.responses.create(
         model=model,
-        messages=[
+        input=[
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
+                    {"type": "input_text", "text": prompt},
                     {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{mime};base64,{image_b64}",
-                            "detail": "high",
-                        },
+                        "type": "input_image",
+                        "image_url": f"data:{mime_type};base64,{image_b64}",
+                        "detail": "high",
                     },
                 ],
             }
         ],
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": "change_detection_label",
+                "strict": True,
+                "schema": RESULT_SCHEMA,
+            }
+        },
         temperature=0,
-        response_format={"type": "json_object"},
+        max_output_tokens=800,
+        store=False,
     )
-    return response.choices[0].message.content or ""
+
+    output_text = response.output_text or ""
+    if not output_text.strip():
+        raise RuntimeError("OpenAI 응답에 출력 텍스트가 없습니다.")
+    return output_text
