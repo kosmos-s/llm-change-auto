@@ -53,7 +53,10 @@ if st.button("검수 이력 갱신", type="primary", use_container_width=True):
                 llm_results_dir=llm_results_dir,
                 output_csv=output_path,
             )
-        st.success(f"검수 이력 생성 완료: {output_path} / {len(history)}개")
+        if history.empty:
+            st.info("연결 가능한 reviewed_json이 아직 없습니다.")
+        else:
+            st.success(f"검수 이력 생성 완료: {output_path} / {len(history)}개")
     except Exception as exc:
         st.error(f"검수 이력을 만들지 못했습니다: {exc}")
 
@@ -63,6 +66,9 @@ if not output_path.exists():
 
 try:
     df = pd.read_csv(output_path)
+except pd.errors.EmptyDataError:
+    st.info("저장된 reviewed_json이 없거나 dataset_index.csv와 연결되지 않았습니다.")
+    st.stop()
 except Exception as exc:
     st.error(f"검수 이력 CSV를 읽을 수 없습니다: {exc}")
     st.stop()
