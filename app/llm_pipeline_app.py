@@ -1,8 +1,4 @@
-"""Streamlit UI for the LLM auto-labeling pipeline.
-
-Run:
-    streamlit run app/llm_pipeline_app.py
-"""
+"""Streamlit UI for the OpenAI auto-labeling pipeline."""
 
 from __future__ import annotations
 
@@ -28,7 +24,7 @@ from scan_dataset import scan_dataset
 load_dotenv(PROJECT_ROOT / ".env")
 
 st.set_page_config(
-    page_title="LLM 자동화 파이프라인",
+    page_title="OpenAI 자동화 파이프라인",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -61,7 +57,13 @@ def read_csv_safe(path: Path) -> pd.DataFrame | None:
 
 def csv_download_button(df: pd.DataFrame, filename: str, label: str) -> None:
     csv_bytes = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-    st.download_button(label, data=csv_bytes, file_name=filename, mime="text/csv", use_container_width=True)
+    st.download_button(
+        label,
+        data=csv_bytes,
+        file_name=filename,
+        mime="text/csv",
+        use_container_width=True,
+    )
 
 
 def show_csv_preview(path: Path, title: str, max_rows: int = 20) -> None:
@@ -76,7 +78,9 @@ def show_csv_preview(path: Path, title: str, max_rows: int = 20) -> None:
     c1.metric("Rows", len(df))
     c2.metric("Columns", len(df.columns))
     if "review_required_final" in df.columns:
-        review_count = df["review_required_final"].astype(str).str.lower().isin(["true", "1", "yes", "y", "o"]).sum()
+        review_count = df["review_required_final"].astype(str).str.lower().isin(
+            ["true", "1", "yes", "y", "o"]
+        ).sum()
         c3.metric("Review", int(review_count))
     elif "error" in df.columns:
         error_count = df["error"].fillna("").astype(str).str.strip().ne("").sum()
@@ -96,22 +100,46 @@ def show_summary(path: Path) -> None:
     with st.expander("요약 보기", expanded=False):
         if "group" in df.columns and "split" in df.columns:
             st.markdown("**group / split 개수**")
-            st.dataframe(df.groupby(["group", "split"], dropna=False).size().reset_index(name="count"), use_container_width=True)
+            st.dataframe(
+                df.groupby(["group", "split"], dropna=False)
+                .size()
+                .reset_index(name="count"),
+                use_container_width=True,
+            )
+        if "llm_provider" in df.columns:
+            st.markdown("**provider / model 개수**")
+            group_cols = [
+                col for col in ["llm_provider", "llm_model"] if col in df.columns
+            ]
+            st.dataframe(
+                df.groupby(group_cols, dropna=False).size().reset_index(name="count"),
+                use_container_width=True,
+            )
         if "review_reasons" in df.columns:
             st.markdown("**review_reasons 개수**")
-            st.dataframe(df.groupby("review_reasons", dropna=False).size().reset_index(name="count"), use_container_width=True)
+            st.dataframe(
+                df.groupby("review_reasons", dropna=False)
+                .size()
+                .reset_index(name="count"),
+                use_container_width=True,
+            )
         if "confidence" in df.columns:
             st.markdown("**confidence 통계**")
-            st.dataframe(pd.to_numeric(df["confidence"], errors="coerce").describe().reset_index(), use_container_width=True)
+            st.dataframe(
+                pd.to_numeric(df["confidence"], errors="coerce")
+                .describe()
+                .reset_index(),
+                use_container_width=True,
+            )
 
 
 def make_default_prefix(source: str, split: str, limit: int) -> str:
     limit_part = f"{limit}" if limit else "all"
-    return f"{source}_{split}_{limit_part}"
+    return f"openai_{source}_{split}_{limit_part}"
 
 
 def render_settings() -> dict[str, object]:
-    st.sidebar.title("LLM 자동화 설정")
+    st.sidebar.title("OpenAI 자동화 설정")
 
     default_root = str(Path.home() / "Desktop" / "산학과제" / "dataset_sample")
     dataset_root = st.sidebar.text_input("데이터 루트 경로", value=default_root)
@@ -121,11 +149,17 @@ def render_settings() -> dict[str, object]:
 
     c1, c2 = st.sidebar.columns(2)
     start = c1.number_input("시작 번호", min_value=0, value=0, step=1)
-    limit = c2.number_input("개수", min_value=1, value=10, step=1)
+    limit = c2.number_input("개수", min_value=1, value=1, step=1)
 
     model = st.sidebar.text_input("OpenAI 모델", value="gpt-4o-mini")
     prompt = st.sidebar.selectbox("프롬프트", PROMPT_OPTIONS, index=0)
-    confidence = st.sidebar.slider("검수 기준 confidence", min_value=0.0, max_value=1.0, value=0.70, step=0.05)
+    confidence = st.sidebar.slider(
+        "검수 기준 confidence",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.70,
+        step=0.05,
+    )
 
     default_prefix = make_default_prefix(source, split, int(limit))
     output_prefix = st.sidebar.text_input("출력 파일 접두어", value=default_prefix)
@@ -135,7 +169,12 @@ def render_settings() -> dict[str, object]:
     if api_key_exists:
         st.sidebar.success("OPENAI_API_KEY 확인됨")
     else:
-        st.sidebar.warning("OPENAI_API_KEY가 없습니다. .env 파일을 확인하세요.")
+        st.sidebar.warning("OPENAI_API_KEY가 없습니다. 로컬 .env 파일을 확인하세요.")
+
+    st.sidebar.caption(
+        "API 키는 화면에 입력하거나 CSV에 저장하지 않습니다. "
+        "프로젝트 루트의 로컬 .env에서만 읽습니다."
+    )
 
     return {
         "dataset_root": dataset_root,
@@ -147,19 +186,41 @@ def render_settings() -> dict[str, object]:
         "prompt": prompt,
         "confidence": float(confidence),
         "output_prefix": output_prefix.strip() or default_prefix,
+        "api_key_exists": api_key_exists,
     }
 
 
 def main() -> None:
     settings = render_settings()
 
-    st.title("LLM 자동화 파이프라인")
-    st.caption("데이터 인덱스 생성 → LLM 자동판별 → 기존 JSON 라벨 비교 → 검수 대상 CSV 생성")
+    st.title("OpenAI GPT 자동화 파이프라인")
+    st.caption(
+        "데이터 인덱스 생성 → OpenAI 자동판별 → 기존 JSON 라벨 비교 → 검수 대상 CSV 생성"
+    )
+    st.info(
+        "보안 원칙: OPENAI_API_KEY는 로컬 .env에서만 읽으며 UI, CSV, 로그에 저장하지 않습니다. "
+        "API 오류 메시지에 키 형태 문자열이 포함되면 자동으로 가립니다."
+    )
 
     index_path = PROJECT_ROOT / "outputs" / "dataset_index.csv"
-    llm_path = PROJECT_ROOT / "outputs" / "llm_results" / f"{settings['output_prefix']}.csv"
-    compare_path = PROJECT_ROOT / "outputs" / "compare_results" / f"{settings['output_prefix']}_compare.csv"
-    review_path = PROJECT_ROOT / "outputs" / "review_lists" / f"{settings['output_prefix']}_review.csv"
+    llm_path = (
+        PROJECT_ROOT
+        / "outputs"
+        / "llm_results"
+        / f"{settings['output_prefix']}.csv"
+    )
+    compare_path = (
+        PROJECT_ROOT
+        / "outputs"
+        / "compare_results"
+        / f"{settings['output_prefix']}_compare.csv"
+    )
+    review_path = (
+        PROJECT_ROOT
+        / "outputs"
+        / "review_lists"
+        / f"{settings['output_prefix']}_review.csv"
+    )
     prompt_path = path_from_project(str(settings["prompt"]))
 
     st.markdown("## 1. 데이터 인덱스 생성")
@@ -180,16 +241,20 @@ def main() -> None:
 
     show_summary(index_path)
 
-    st.markdown("## 2. LLM 자동판별")
+    st.markdown("## 2. OpenAI 자동판별")
     c1, c2 = st.columns([1, 3])
     with c1:
-        if st.button("LLM 실행", type="primary", use_container_width=True):
-            if not index_path.exists():
+        if st.button("OpenAI 실행", type="primary", use_container_width=True):
+            if not settings["api_key_exists"]:
+                st.error("OPENAI_API_KEY가 없습니다. 로컬 .env 파일을 설정한 뒤 앱을 다시 실행하세요.")
+            elif not index_path.exists():
                 st.error("먼저 dataset_index.csv를 생성하세요.")
             elif not prompt_path.exists():
                 st.error(f"프롬프트 파일이 없습니다: {prompt_path}")
             else:
-                with st.spinner("LLM 자동판별 실행 중... 10장도 시간이 걸릴 수 있습니다."):
+                with st.spinner(
+                    f"OpenAI 자동판별 실행 중... {settings['limit']}장을 처리합니다."
+                ):
                     run_llm(
                         input_csv=index_path,
                         prompt_path=prompt_path,
@@ -200,15 +265,18 @@ def main() -> None:
                         limit=int(settings["limit"]),
                         model=str(settings["model"]),
                     )
-                st.success(f"LLM 결과 생성 완료: {llm_path}")
+                st.success(f"OpenAI 결과 생성 완료: {llm_path}")
     with c2:
         st.code(
             "python src\\run_llm_labeling.py "
-            f"--input outputs\\dataset_index.csv --source {settings['source']} --split {settings['split']} "
-            f"--start {settings['start']} --limit {settings['limit']} --output outputs\\llm_results\\{settings['output_prefix']}.csv"
+            f"--model {settings['model']} "
+            f"--input outputs\\dataset_index.csv --source {settings['source']} "
+            f"--split {settings['split']} --start {settings['start']} "
+            f"--limit {settings['limit']} "
+            f"--output outputs\\llm_results\\{settings['output_prefix']}.csv"
         )
 
-    show_csv_preview(llm_path, "LLM 결과 미리보기")
+    show_csv_preview(llm_path, "OpenAI 결과 미리보기")
     show_summary(llm_path)
 
     st.markdown("## 3. 기존 JSON 라벨과 비교")
@@ -216,10 +284,14 @@ def main() -> None:
     with c1:
         if st.button("비교 실행", type="primary", use_container_width=True):
             if not llm_path.exists():
-                st.error("먼저 LLM 결과 CSV를 생성하세요.")
+                st.error("먼저 OpenAI 결과 CSV를 생성하세요.")
             else:
-                with st.spinner("기존 라벨과 LLM 결과 비교 중..."):
-                    compare(llm_path, compare_path, confidence_threshold=float(settings["confidence"]))
+                with st.spinner("기존 라벨과 OpenAI 결과 비교 중..."):
+                    compare(
+                        llm_path,
+                        compare_path,
+                        confidence_threshold=float(settings["confidence"]),
+                    )
                 st.success(f"비교 결과 생성 완료: {compare_path}")
     with c2:
         st.code(
@@ -252,7 +324,10 @@ def main() -> None:
     show_summary(review_path)
 
     st.markdown("## 다음 단계")
-    st.info("검수 대상 CSV가 만들어지면, 해당 파일 목록을 검수툴 UI와 연결해서 LLM이 의심한 항목만 순서대로 확인하는 기능을 추가할 수 있습니다.")
+    st.info(
+        "검수 대상 CSV가 만들어지면 검수 UI에서 LLM 검수 대상 CSV 모드로 "
+        "해당 파일만 순서대로 확인하세요."
+    )
 
 
 if __name__ == "__main__":
