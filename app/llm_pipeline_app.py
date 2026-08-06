@@ -32,6 +32,7 @@ st.set_page_config(
 SOURCE_OPTIONS = ["dataset", "errors", "all"]
 SPLIT_OPTIONS = ["test", "train", "val", "all"]
 PROMPT_OPTIONS = [
+    "prompts/prompt_v4_quality.txt",
     "prompts/prompt_v3_json_strict.txt",
     "prompts/prompt_v2_guideline.txt",
     "prompts/prompt_v1_basic.txt",
