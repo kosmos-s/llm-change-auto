@@ -11,11 +11,4 @@ if str(APP_DIR) not in sys.path:
 
 import llm_pipeline_app
 
-llm_pipeline_app.PROMPT_OPTIONS = [
-    "prompts/prompt_v4_target85.txt",
-    "prompts/prompt_v3_json_strict.txt",
-    "prompts/prompt_v2_guideline.txt",
-    "prompts/prompt_v1_basic.txt",
-]
-
 llm_pipeline_app.main()
