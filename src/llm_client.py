@@ -80,7 +80,7 @@ def sanitize_error_message(error: Exception | str) -> str:
         message = message.replace(api_key, "[REDACTED_API_KEY]")
 
     message = re.sub(
-        r"(?i)(?:sk|key)_[a-z0-9_-]{6,}",
+        r"(?i)\b(?:sk|key)[-_][a-z0-9_*.-]{6,}",
         "[REDACTED_API_KEY]",
         message,
     )
