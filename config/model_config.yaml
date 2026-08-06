@@ -1,7 +1,8 @@
-provider: openai
 model: gpt-4o-mini
-max_tokens: 800
+max_output_tokens: 800
 temperature: 0.0
+timeout_seconds: 60
+max_retries: 2
 
 review_policy:
   confidence_threshold: 0.70
