@@ -15,7 +15,8 @@ from dotenv import load_dotenv
 from image_utils import image_to_base64
 
 
-load_dotenv()
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 RESULT_SCHEMA = {
     "type": "object",
