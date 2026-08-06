@@ -34,6 +34,7 @@ data/images/
 
 # Outputs
 outputs/**/*.csv
+outputs/**/*.json
 outputs/**/*.jsonl
 outputs/**/*.xlsx
 outputs/**/*.html
