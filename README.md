@@ -1,18 +1,20 @@
 # LLM Change Auto
 
-우송대학교 산학협력 과제용 **항공영상 변화탐지 학습데이터 검수 + LLM 자동화 통합 도구**입니다.
+우송대학교 산학협력 과제용 **항공영상 변화탐지 학습데이터 검수 + OpenAI GPT 자동화 통합 도구**입니다.
 
 이 프로젝트는 `dataset_sample` 또는 NAS 데이터에 포함된 2시점 항공영상 쌍을 대상으로 다음 작업을 수행합니다.
 
 - `*_combined.jpg`, `*_left.jpg`, `*_right.jpg`, `*_combined.json` 파일 구조 읽기
 - `dataset` 일반 학습데이터와 `errors` 오탐/미탐 검수데이터 구분
 - 기존 JSON 라벨 확인 및 수정
-- LLM/VLM 자동 변화유무 판단
-- 기존 JSON 라벨과 LLM 결과 비교
+- OpenAI GPT 기반 변화유무 및 세부 라벨 자동판단
+- 기존 JSON 라벨과 GPT 결과 비교
 - 육안검수 대상 CSV 생성
 - `review_list.csv` 기반 검수 대상만 보기
 - 결과 CSV와 `reviewed_json` 저장 현황 통계 확인
 - Streamlit 통합 UI 제공
+
+과제 자료의 수행 흐름인 **자동라벨링 → 기존 라벨 비교 → Human-in-the-loop 검수 → 정제 결과 축적**에 맞춰 구성했습니다.
 
 ---
 
@@ -63,14 +65,17 @@ NAS 전체 데이터처럼 아래 구조도 지원합니다.
 
 ---
 
-## 2. 중요 원칙
+## 2. API Key 보안 원칙
 
-원본 이미지 데이터는 GitHub에 업로드하지 않습니다.
+- 실제 API 키는 프로젝트 루트의 로컬 `.env` 파일에만 저장합니다.
+- API 키를 Streamlit 화면에 입력하지 않습니다.
+- API 키를 Python 코드, CSV, JSON, 로그에 저장하지 않습니다.
+- `.env`와 `.env.*`는 `.gitignore`에서 제외되며 `.env.example`만 공유합니다.
+- OpenAI SDK가 `OPENAI_API_KEY` 환경변수를 직접 읽도록 구성했습니다.
+- API 오류 메시지에 `sk_...`, `key_...` 같은 키 형태 문자열이 포함되면 `[REDACTED_API_KEY]`로 가린 뒤 결과 CSV에 저장합니다.
+- 원본 이미지 데이터와 실행 결과 CSV는 GitHub에 업로드하지 않습니다.
 
-- 원본 데이터는 NAS 또는 로컬 데이터 폴더에서만 읽습니다.
-- GitHub에는 코드, 프롬프트, 설정 파일, 문서만 저장합니다.
-- `.env` 파일과 API Key는 절대 커밋하지 않습니다.
-- 처음 검수할 때는 원본 JSON 덮어쓰기보다 `reviewed_json 폴더에 저장` 방식을 권장합니다.
+현재 저장소 이력에는 `.env` 파일 커밋 기록이 없습니다. 그래도 실제 키를 화면 캡처, 채팅, 문서 또는 커밋에 붙여넣지 마세요.
 
 ---
 
@@ -86,18 +91,39 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 pip install -r requirements.txt
 ```
 
-이미 가상환경을 만든 적이 있으면 아래만 다시 실행하면 됩니다.
+이미 가상환경을 만든 적이 있으면 아래만 실행합니다.
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
+Gemini 관련 SDK와 REST 호출 코드는 제거했으며 자동라벨링 경로는 OpenAI 전용입니다.
+
 ---
 
-## 4. 통합 UI 실행
+## 4. OpenAI API 설정
 
-검수 UI, LLM 자동화 UI, 통계 UI를 하나의 Streamlit 앱에서 사용합니다.
+`.env.example`을 복사하여 `.env`를 만듭니다.
+
+```powershell
+copy .env.example .env
+```
+
+`.env` 파일에는 아래처럼 입력합니다.
+
+```text
+OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_TIMEOUT=60
+```
+
+OpenAI SDK는 환경변수에서 키를 자동으로 읽습니다. 코드나 UI에는 키 값을 전달하지 않습니다.
+
+---
+
+## 5. 통합 UI 실행
+
+검수 UI, OpenAI 자동화 UI, 통계 UI를 하나의 Streamlit 앱에서 사용합니다.
 
 ### VS Code 실행
 
@@ -111,7 +137,7 @@ app/run_app.py 열기 → Ctrl + F5
 python -m streamlit run app\main_app.py
 ```
 
-브라우저 주소는 하나만 사용합니다.
+브라우저 주소:
 
 ```text
 http://localhost:8501
@@ -121,13 +147,13 @@ http://localhost:8501
 
 | 페이지 | 역할 |
 |---|---|
-| `검수 UI` | 이미지 확인, JSON 라벨 수정, LLM 검수 대상 CSV 확인 |
-| `LLM 자동화 UI` | 데이터 인덱스 생성, LLM 실행, 라벨 비교, 검수 목록 생성 |
+| `검수 UI` | 이미지 확인, JSON 라벨 수정, GPT 검수 대상 CSV 확인 |
+| `LLM 자동화 UI` | 데이터 인덱스 생성, OpenAI 실행, 라벨 비교, 검수 목록 생성 |
 | `통계 UI` | CSV 결과와 `reviewed_json` 저장 현황 요약 |
 
 ---
 
-## 5. 검수 UI 기능
+## 6. 검수 UI 기능
 
 검수 UI에는 두 가지 모드가 있습니다.
 
@@ -139,26 +165,26 @@ http://localhost:8501
 - 현재 파일이 `dataset`인지 `errors`인지 표시
 - `errors` 하위 오류 유형 폴더명 표시
 
-### LLM 검수 대상 CSV
+### GPT 검수 대상 CSV
 
-LLM 자동화 UI에서 생성한 검수 대상 CSV만 불러옵니다.
+OpenAI 자동화 UI에서 생성한 검수 대상 CSV만 불러옵니다.
 
-예시 파일:
+예시:
 
 ```text
-outputs/review_lists/dataset_test_10_review.csv
+outputs/review_lists/openai_dataset_test_1_review.csv
 ```
 
-이 모드에서는 CSV에 들어 있는 파일만 순서대로 보여주며, 아래 정보를 함께 표시합니다.
+표시 정보:
 
-- LLM change
+- GPT 변화유무 판단
 - confidence
 - label_mismatch
 - detail_mismatch
 - detail_mismatch_keys
 - review_reasons
-- 기존 라벨과 LLM 라벨 비교표
-- LLM 판단 근거
+- 기존 라벨과 GPT 라벨 비교표
+- GPT 판단 근거
 
 ### 공통 검수 기능
 
@@ -168,114 +194,123 @@ outputs/review_lists/dataset_test_10_review.csv
 - `Save Changes` 저장
 - `Save & Next` 저장 후 다음 파일 이동
 
-저장 방식은 두 가지입니다.
+저장 방식:
 
 | 저장 방식 | 설명 |
 |---|---|
 | `reviewed_json 폴더에 저장` | 원본 JSON은 그대로 두고 `outputs/reviewed_json/{source}/{split}`에 저장 |
 | `원본 JSON 덮어쓰기` | 기존 `*_combined.json` 파일을 바로 수정 |
 
-처음에는 안전하게 `reviewed_json 폴더에 저장`을 사용하세요.
+처음에는 `reviewed_json 폴더에 저장`을 사용하세요.
 
 ---
 
-## 6. LLM 자동화 UI 기능
+## 7. OpenAI 자동화 UI 기능
 
-LLM 자동화 UI에서는 아래 과정을 버튼으로 실행합니다.
+아래 과정을 버튼으로 실행합니다.
 
 ```text
 데이터 인덱스 생성
-→ LLM 자동판별
+→ OpenAI GPT 자동판별
 → 기존 JSON 라벨과 비교
 → 검수 대상 CSV 생성
 ```
 
-처음 테스트 권장 설정입니다.
+첫 테스트 권장 설정:
 
 ```text
 데이터 종류: dataset
 분할: test
 시작 번호: 0
-개수: 10
-모델: gpt-4o-mini
+개수: 1
+OpenAI 모델: gpt-4o-mini
 프롬프트: prompts/prompt_v3_json_strict.txt
-출력 파일 접두어: dataset_test_10
+출력 파일 접두어: openai_dataset_test_1
 ```
 
-생성되는 주요 파일은 아래와 같습니다.
+생성 파일:
 
 ```text
 outputs/dataset_index.csv
-outputs/llm_results/dataset_test_10.csv
-outputs/compare_results/dataset_test_10_compare.csv
-outputs/review_lists/dataset_test_10_review.csv
+outputs/llm_results/openai_dataset_test_1.csv
+outputs/compare_results/openai_dataset_test_1_compare.csv
+outputs/review_lists/openai_dataset_test_1_review.csv
 ```
 
-생성 후 검수 UI에서 `LLM 검수 대상 CSV` 모드로 `outputs/review_lists/dataset_test_10_review.csv`를 불러오면 됩니다.
+1장이 정상 처리되고 `error` 컬럼이 비어 있는 것을 확인한 뒤 `3장 → 10장 → 50장` 순서로 확대합니다.
+
+터미널 실행 예시:
+
+```powershell
+python src\run_llm_labeling.py --model gpt-4o-mini --input outputs\dataset_index.csv --source dataset --split test --limit 1 --output outputs\llm_results\openai_dataset_test_1.csv
+```
 
 ---
 
-## 7. 통계 UI 기능
+## 8. OpenAI 호출 구조
+
+`src/llm_client.py`는 OpenAI 공식 Python SDK의 Responses API를 사용합니다.
+
+- 이미지: base64 data URL 형식의 `input_image`
+- 프롬프트: `input_text`
+- 출력: JSON Schema 기반 Structured Output
+- 응답 저장: `store=False`
+- timeout: `OPENAI_TIMEOUT`, 기본 60초
+- 재시도: 최대 2회
+- 키 전달: `OpenAI()`가 환경변수에서 자동 로드
+
+자동판별 결과에는 아래 필드가 반드시 포함됩니다.
+
+```text
+change, class,
+arti, arti_bu, arti_bu_t, arti_binil, arti_road, arti_roa_m, arti_other,
+tree, fore, farm, water,
+reason_ko, reason_en, confidence, review_required
+```
+
+---
+
+## 9. 통계 UI 기능
 
 통계 UI에서는 `outputs` 폴더의 결과를 요약합니다.
 
-확인 가능한 항목:
-
 - `dataset_index.csv` 개수
-- LLM 결과 CSV 요약
+- OpenAI 결과 CSV 요약
 - 비교 결과 CSV 요약
 - 검수 대상 CSV 요약
 - review_reasons별 개수
 - label_mismatch / detail_mismatch 개수
 - confidence 평균 및 low confidence 개수
-- 라벨별 original / llm 개수 비교
+- 라벨별 original / GPT 개수 비교
 - `outputs/reviewed_json` 저장 현황
 
 ---
 
-## 8. API Key 설정
-
-LLM 자동화 실행 전 `.env.example`을 복사해서 `.env`를 만들고 API Key를 입력합니다.
-
-```powershell
-copy .env.example .env
-```
-
-`.env` 예시:
-
-```text
-OPENAI_API_KEY=your_api_key_here
-```
-
-`.env`는 `.gitignore`에 의해 GitHub에 올라가지 않습니다.
-
----
-
-## 9. 현재 프로젝트 구조
+## 10. 현재 프로젝트 구조
 
 ```text
 llm-change-auto/
 ├─ app/
-│  ├─ main_app.py                 # 통합 UI 메인
-│  ├─ run_app.py                  # Ctrl+F5 실행용
-│  ├─ reviewer_app.py             # 검수 UI 본체
-│  ├─ llm_pipeline_app.py         # LLM 자동화 UI 본체
-│  ├─ run_reviewer.py             # 통합 UI 호환 실행 파일
-│  ├─ run_llm_pipeline.py         # 통합 UI 호환 실행 파일
+│  ├─ main_app.py
+│  ├─ run_app.py
+│  ├─ reviewer_app.py
+│  ├─ llm_pipeline_app.py
+│  ├─ run_reviewer.py
+│  ├─ run_llm_pipeline.py
 │  └─ pages/
 │     ├─ 1_검수_UI.py
 │     ├─ 2_LLM_자동화_UI.py
 │     └─ 3_통계_UI.py
 │
 ├─ src/
-│  ├─ dataset_loader.py           # 폴더 로드 + review_list.csv 로드
-│  ├─ json_io.py                  # JSON 라벨 읽기/저장
-│  ├─ scan_dataset.py             # 전체 데이터 CSV 인덱스 생성
-│  ├─ llm_client.py               # OpenAI Vision 호출
-│  ├─ run_llm_labeling.py         # LLM 자동 라벨링 실행
-│  ├─ compare_labels.py           # 기존 라벨과 LLM 결과 비교
-│  ├─ make_review_list.py         # 검수 대상 CSV 생성
-│  ├─ summarize_results.py        # CSV 요약 출력
+│  ├─ dataset_loader.py
+│  ├─ json_io.py
+│  ├─ scan_dataset.py
+│  ├─ llm_client.py              # OpenAI Responses API 전용
+│  ├─ run_llm_labeling.py        # OpenAI 자동 라벨링 실행
+│  ├─ compare_labels.py
+│  ├─ make_review_list.py
+│  ├─ summarize_results.py
 │  ├─ image_utils.py
 │  ├─ prompt_builder.py
 │  ├─ parse_llm_result.py
@@ -285,6 +320,8 @@ llm-change-auto/
 ├─ config/
 ├─ outputs/
 ├─ docs/
+│  ├─ openai_setup.md
+│  └─ llm_pipeline_ui.md
 ├─ logs/
 ├─ .vscode/
 ├─ .env.example
@@ -295,7 +332,7 @@ llm-change-auto/
 
 ---
 
-## 10. 자주 생기는 문제
+## 11. 자주 생기는 문제
 
 ### PowerShell에서 가상환경 실행 오류
 
@@ -304,59 +341,54 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
 ```
 
-### streamlit 명령어를 찾을 수 없음
-
-가상환경을 켠 뒤 아래 명령어를 실행합니다.
+### `streamlit` 명령어를 찾을 수 없음
 
 ```powershell
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-```
-
-그래도 안 되면 아래처럼 실행합니다.
-
-```powershell
 python -m streamlit run app\main_app.py
 ```
 
-### Load를 눌렀는데 파일이 안 나옴
+### `OPENAI_API_KEY가 없습니다`
 
-경로가 데이터 루트까지 맞는지 확인하세요.
+프로젝트 루트에 `.env`가 있는지 확인하고 Streamlit을 완전히 종료한 뒤 다시 실행합니다.
+
+```text
+Ctrl + C
+app/run_app.py 열기 → Ctrl + F5
+```
+
+### `invalid_api_key`
+
+키를 다시 확인합니다. 오류 결과 CSV에는 키 형태 문자열이 가려져 저장되지만, 잘못된 실행 결과는 삭제하거나 새로운 출력 접두어로 다시 실행하세요.
+
+### Load를 눌렀는데 파일이 안 나옴
 
 ```text
 올바른 예: C:\Users\rlarj\Desktop\산학과제\dataset_sample
 잘못된 예: C:\Users\rlarj\Desktop\산학과제\dataset_sample\dataset\test
 ```
 
-앱에서 `dataset/errors`와 `test/train/val`은 사이드바에서 선택합니다.
-
-### LLM 검수 대상 CSV를 불러오지 못함
-
-먼저 LLM 자동화 UI에서 `검수 목록 생성`까지 실행해 아래 파일을 만들어야 합니다.
-
-```text
-outputs/review_lists/dataset_test_10_review.csv
-```
-
 ---
 
-## 11. 현재 구현 상태
+## 12. 현재 구현 상태
 
 - [x] 통합 Streamlit UI
 - [x] 검수 UI
-- [x] LLM 자동화 UI
+- [x] OpenAI GPT 자동화 UI
 - [x] 통계 UI
 - [x] Ctrl+F5 통합 실행
 - [x] dataset/errors 구분 로드
 - [x] errors 하위 오류 유형 폴더 표시
 - [x] combined/left/right 이미지 연결
-- [x] JSON 라벨 읽기
-- [x] 수정 라벨 저장
+- [x] JSON 라벨 읽기 및 수정 저장
 - [x] 데이터셋 CSV 스캔
-- [x] LLM 결과 CSV 저장
-- [x] 기존 라벨과 LLM 결과 비교
+- [x] OpenAI Structured Output 기반 결과 CSV 저장
+- [x] 기존 라벨과 GPT 결과 비교
 - [x] 검수 대상 CSV 생성
 - [x] 검수 UI에서 review_list.csv만 불러오기
-- [x] LLM 결과와 원본 라벨을 검수 UI에서 동시에 비교 표시
-- [x] 검수 결과 통계 화면 추가
-- [ ] reviewed_json 저장 결과를 원본/LLM 결과와 통계 비교
+- [x] GPT 결과와 원본 라벨 동시 비교 표시
+- [x] 검수 결과 통계 화면
+- [x] API 키 오류 메시지 마스킹
+- [ ] reviewed_json 저장 결과를 원본/GPT 결과와 통계 비교
 - [ ] 프롬프트 성능 개선
