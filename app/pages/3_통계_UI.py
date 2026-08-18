@@ -1,8 +1,7 @@
-"""Statistics dashboard for LLM Change Auto."""
+"""Statistics dashboard for OpenAI-based LLM Change Auto."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +35,29 @@ LABEL_KEYS = [
 
 
 st.title("검수 결과 통계")
-st.caption("outputs 폴더의 CSV와 reviewed_json 저장 결과를 요약합니다.")
+st.caption("OpenAI 결과 CSV와 reviewed_json 저장 결과만 기준으로 요약합니다.")
+
+
+def is_openai_csv(path: Path) -> bool:
+    """Return True for OpenAI result/compare/review CSV files.
+
+    Current files contain llm_provider=openai. Older OpenAI files are accepted
+    when their filename starts with openai_. Gemini files are excluded.
+    """
+    name = path.name.lower()
+    if "gemini" in name:
+        return False
+    try:
+        header = pd.read_csv(path, nrows=20)
+    except Exception:
+        return name.startswith("openai_")
+
+    if "llm_provider" in header.columns:
+        providers = header["llm_provider"].fillna("").astype(str).str.strip().str.lower()
+        non_empty = providers[providers != ""]
+        if not non_empty.empty:
+            return bool((non_empty == "openai").all())
+    return name.startswith("openai_")
 
 
 def list_csv_files(kind: str) -> list[Path]:
@@ -44,7 +65,10 @@ def list_csv_files(kind: str) -> list[Path]:
     if target.is_file():
         return [target]
     if target.is_dir():
-        return sorted(target.glob("*.csv"))
+        files = sorted(target.glob("*.csv"))
+        if kind != "dataset_index":
+            files = [path for path in files if is_openai_csv(path)]
+        return files
     return []
 
 
@@ -73,7 +97,7 @@ def show_basic_metrics(df: pd.DataFrame) -> None:
 
     if "error" in df.columns:
         error_count = df["error"].fillna("").astype(str).str.strip().ne("").sum()
-        metrics.append(("LLM 오류", int(error_count)))
+        metrics.append(("OpenAI 오류", int(error_count)))
 
     if "review_required_final" in df.columns:
         review_count = is_true_series(df["review_required_final"]).sum()
@@ -121,7 +145,7 @@ def show_group_counts(df: pd.DataFrame) -> None:
         st.dataframe(table, use_container_width=True, hide_index=True)
 
     if "llm_class" in df.columns:
-        st.markdown("**LLM class별 개수**")
+        st.markdown("**GPT class별 개수**")
         table = df.groupby("llm_class", dropna=False).size().reset_index(name="count").sort_values("count", ascending=False)
         st.dataframe(table, use_container_width=True, hide_index=True)
 
@@ -142,7 +166,7 @@ def show_label_counts(df: pd.DataFrame) -> None:
         if original_col in df.columns:
             row["original"] = int(pd.to_numeric(df[original_col], errors="coerce").fillna(0).sum())
         if llm_col in df.columns:
-            row["llm"] = int(pd.to_numeric(df[llm_col], errors="coerce").fillna(0).sum())
+            row["gpt"] = int(pd.to_numeric(df[llm_col], errors="coerce").fillna(0).sum())
         rows.append(row)
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
@@ -203,21 +227,22 @@ def show_reviewed_json_stats() -> None:
 
 def show_csv_section() -> None:
     st.markdown("## CSV 결과 통계")
+    st.info("Gemini 등 과거 Provider 결과는 목록에서 자동 제외하고 OpenAI 결과만 표시합니다.")
 
     kind = st.selectbox(
         "CSV 종류",
         ["dataset_index", "llm_results", "compare_results", "review_lists"],
         format_func=lambda value: {
             "dataset_index": "dataset_index.csv",
-            "llm_results": "LLM 결과 CSV",
-            "compare_results": "비교 결과 CSV",
-            "review_lists": "검수 대상 CSV",
+            "llm_results": "OpenAI 결과 CSV",
+            "compare_results": "OpenAI 비교 결과 CSV",
+            "review_lists": "OpenAI 검수 대상 CSV",
         }[value],
     )
 
     files = list_csv_files(kind)
     if not files:
-        st.info("해당 CSV 파일이 아직 없습니다.")
+        st.info("해당 OpenAI CSV 파일이 아직 없습니다.")
         return
 
     selected = st.selectbox("파일 선택", files, format_func=lambda path: str(path.relative_to(PROJECT_ROOT)))
