@@ -17,7 +17,8 @@ from build_review_history import build_review_history
 
 
 st.title("검수 이력")
-st.caption("reviewed_json에 저장된 사람 확정 라벨을 원본 라벨 및 최근 GPT 결과와 비교합니다.")
+st.caption("reviewed_json의 사람 확정 라벨을 원본 라벨과 OpenAI GPT 결과에 연결합니다.")
+st.info("과거 Gemini 결과는 자동 제외하고 OpenAI 결과만 사용합니다.")
 
 index_path = Path(
     st.text_input(
@@ -33,7 +34,7 @@ reviewed_root = Path(
 )
 llm_results_dir = Path(
     st.text_input(
-        "LLM 결과 폴더",
+        "OpenAI 결과 폴더",
         value=str(PROJECT_ROOT / "outputs" / "llm_results"),
     )
 )
@@ -46,7 +47,7 @@ output_path = Path(
 
 if st.button("검수 이력 갱신", type="primary", use_container_width=True):
     try:
-        with st.spinner("원본·GPT·사람 검수 결과를 연결하는 중..."):
+        with st.spinner("원본·OpenAI·사람 검수 결과를 연결하는 중..."):
             history = build_review_history(
                 index_csv=index_path,
                 reviewed_root=reviewed_root,
@@ -87,13 +88,45 @@ match = (
     if "llm_human_change_match" in df.columns
     else pd.Series(False, index=df.index)
 )
-llm_available = df["llm_change"].notna() if "llm_change" in df.columns else pd.Series(False, index=df.index)
+llm_available = (
+    df["llm_change"].notna() & df["llm_change"].astype(str).str.strip().ne("")
+    if "llm_change" in df.columns
+    else pd.Series(False, index=df.index)
+)
+matched_count = int((match & llm_available).sum())
+mismatch_count = int((~match & llm_available).sum())
+modified_count = int(modified.sum())
+unchanged_count = int((~modified).sum())
 
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("검수 완료 파일", len(df))
-c2.metric("라벨 수정", int(modified.sum()))
-c3.metric("라벨 유지", int((~modified).sum()))
-c4.metric("GPT-사람 변화유무 일치", int((match & llm_available).sum()))
+c1.metric("검수 완료", len(df))
+c2.metric("원본 라벨 수정", modified_count)
+c3.metric("원본 라벨 유지", unchanged_count)
+c4.metric("OpenAI 결과 연결", int(llm_available.sum()))
+
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("GPT-사람 일치", matched_count)
+c2.metric("GPT-사람 불일치", mismatch_count)
+c3.metric("원본 수정률", f"{modified_count / len(df):.1%}" if len(df) else "0.0%")
+c4.metric(
+    "GPT-사람 일치율",
+    f"{matched_count / int(llm_available.sum()):.1%}" if int(llm_available.sum()) else "-",
+)
+
+st.markdown("### 검수 결과 해석")
+st.caption(
+    "원본 라벨 수정 = 사람이 기존 JSON을 잘못되었다고 보고 실제 라벨을 변경한 건수입니다. "
+    "GPT-사람 불일치 = GPT 판단과 사람의 최종 판단이 달랐던 건수이며, 이것만으로 원본 라벨 오류를 뜻하지는 않습니다."
+)
+
+summary_rows = [
+    {"항목": "검수 완료", "개수": len(df)},
+    {"항목": "원본 라벨 수정", "개수": modified_count},
+    {"항목": "원본 라벨 유지", "개수": unchanged_count},
+    {"항목": "GPT-사람 변화유무 일치", "개수": matched_count},
+    {"항목": "GPT-사람 변화유무 불일치", "개수": mismatch_count},
+]
+st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
 
 if "modified_keys" in df.columns:
     changed_labels: list[str] = []
@@ -114,8 +147,20 @@ if "source" in df.columns and "split" in df.columns:
     group_df = df.groupby(["source", "split"], dropna=False).size().reset_index(name="count")
     st.dataframe(group_df, use_container_width=True, hide_index=True)
 
+if "review_status" in df.columns:
+    st.markdown("### 검수 결과별 파일")
+    status_filter = st.radio("표시", ["전체", "수정됨", "유지됨"], horizontal=True)
+    if status_filter == "수정됨":
+        view_df = df[modified].copy()
+    elif status_filter == "유지됨":
+        view_df = df[~modified].copy()
+    else:
+        view_df = df
+else:
+    view_df = df
+
 st.markdown("### 검수 이력 목록")
-st.dataframe(df, use_container_width=True, height=520)
+st.dataframe(view_df, use_container_width=True, height=520)
 
 csv_bytes = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
 st.download_button(
@@ -128,5 +173,5 @@ st.download_button(
 
 st.info(
     "현재 버전은 reviewed_json의 최신 저장 상태를 기준으로 이력을 만듭니다. "
-    "같은 파일의 매 저장 시점별 이벤트 기록은 다음 단계에서 추가합니다."
+    "검수 결과는 원본·OpenAI·사람 최종 라벨을 한 행에서 비교할 수 있습니다."
 )
