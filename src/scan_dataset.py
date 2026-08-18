@@ -2,6 +2,7 @@
 
 현재 데이터 구조에 맞춰 `*_combined.jpg`만 LLM 입력 대상으로 스캔한다.
 같은 이름의 `*_combined.json`, `*_left.jpg`, `*_right.jpg` 경로와 기존 라벨도 함께 읽는다.
+`errors` 하위 오류 유형 폴더까지 보존해 동일 image_id 충돌을 방지한다.
 """
 
 from __future__ import annotations
@@ -53,6 +54,33 @@ def infer_group(path: Path) -> str:
     return "unknown"
 
 
+def infer_relative_folder(path: Path, split: str) -> str:
+    """Return folders between split and the image filename.
+
+    Examples:
+        dataset/train/file.jpg -> .
+        errors/train/farmland_fp_00/file.jpg -> farmland_fp_00
+    """
+    if split == "unknown":
+        return "."
+
+    parts = list(path.parts)
+    lower_parts = [part.lower() for part in parts]
+    split_indexes = [index for index, part in enumerate(lower_parts) if part == split.lower()]
+    if not split_indexes:
+        return "."
+
+    split_index = split_indexes[-1]
+    folder_parts = parts[split_index + 1 : -1]
+    return "/".join(folder_parts) if folder_parts else "."
+
+
+def infer_error_type(group: str, relative_folder: str) -> str:
+    if group != "errors" or not relative_folder or relative_folder == ".":
+        return ""
+    return relative_folder.split("/")[0]
+
+
 def read_label_json(json_path: Path) -> dict[str, Any]:
     if not json_path.exists():
         return {}
@@ -100,6 +128,9 @@ def scan_dataset(root: Path) -> pd.DataFrame:
         left_path, right_path, json_path = make_pair_paths(combined_path)
         label_json = read_label_json(json_path)
         labels = normalize_labels(label_json)
+        split = infer_split(combined_path)
+        group = infer_group(combined_path)
+        relative_folder = infer_relative_folder(combined_path, split)
 
         rows.append(
             {
@@ -109,15 +140,17 @@ def scan_dataset(root: Path) -> pd.DataFrame:
                 "left_image_path": str(left_path) if left_path.exists() else "",
                 "right_image_path": str(right_path) if right_path.exists() else "",
                 "json_path": str(json_path) if json_path.exists() else "",
-                "split": infer_split(combined_path),
-                "group": infer_group(combined_path),
+                "split": split,
+                "group": group,
+                "relative_folder": relative_folder,
+                "error_type": infer_error_type(group, relative_folder),
                 **labels,
             }
         )
 
     if not rows:
         return pd.DataFrame()
-    return pd.DataFrame(rows).sort_values(["group", "split", "image_name"])
+    return pd.DataFrame(rows).sort_values(["group", "split", "relative_folder", "image_name"])
 
 
 def main() -> None:
