@@ -98,6 +98,36 @@ def normalize_reviewed_json(path: Path) -> dict[str, Any]:
     return labels
 
 
+def filter_openai_rows(frame: pd.DataFrame, csv_path: Path) -> pd.DataFrame:
+    """Keep only OpenAI rows.
+
+    New result CSVs contain llm_provider=openai. Older OpenAI CSVs may not have
+    that column, so an openai_ filename is accepted as a backward-compatible
+    fallback. Gemini files are never included.
+    """
+    if frame.empty:
+        return frame
+
+    if "llm_provider" in frame.columns:
+        provider = frame["llm_provider"].fillna("").astype(str).str.strip().str.lower()
+        openai_rows = frame[provider == "openai"].copy()
+        if not openai_rows.empty:
+            return openai_rows
+        if provider.ne("").any():
+            return frame.iloc[0:0].copy()
+
+    filename = csv_path.name.lower()
+    if filename.startswith("openai_") and "gemini" not in filename:
+        result = frame.copy()
+        if "llm_provider" not in result.columns:
+            result["llm_provider"] = "openai"
+        else:
+            result["llm_provider"] = result["llm_provider"].replace("", "openai").fillna("openai")
+        return result
+
+    return frame.iloc[0:0].copy()
+
+
 def load_latest_llm_rows(results_dir: Path) -> pd.DataFrame:
     if not results_dir.exists():
         return pd.DataFrame()
@@ -110,6 +140,11 @@ def load_latest_llm_rows(results_dir: Path) -> pd.DataFrame:
             continue
         if frame.empty or "image_id" not in frame.columns:
             continue
+
+        frame = filter_openai_rows(frame, csv_path)
+        if frame.empty:
+            continue
+
         frame = frame.copy()
         frame["_relative_folder"] = frame.apply(row_relative_folder, axis=1)
         frame["_llm_csv"] = str(csv_path)
@@ -215,6 +250,7 @@ def build_review_history(
             "original_json_path": str(original.get("json_path", "")),
             "reviewed_json_path": str(reviewed_path),
             "llm_result_csv": str(llm.get("_llm_csv", "")),
+            "llm_provider": str(llm.get("llm_provider", "openai" if llm else "")),
             "original_change": as_int(original.get("original_change", 0)),
             "llm_change": as_int(llm.get("llm_change", 0)) if llm else "",
             "human_change": human["change"],
