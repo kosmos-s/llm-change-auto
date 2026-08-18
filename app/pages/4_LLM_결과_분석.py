@@ -16,22 +16,44 @@ if str(SRC_DIR) not in sys.path:
 from evaluate_results import evaluate_dataframe
 
 
-st.title("LLM 결과 분석")
-st.caption("현재 JSON 라벨과 OpenAI 결과를 비교해 검수 보조도구의 특성을 확인합니다.")
+st.title("OpenAI 결과 분석")
+st.caption("현재 JSON 라벨과 OpenAI GPT 결과를 비교해 검수 보조도구의 특성을 확인합니다.")
 st.info(
     "이 화면의 F2는 GPT 결과와 현재 JSON 라벨의 비교 지표입니다. "
     "산학과제 최종 목표인 변화탐지 모델 F2-Score 0.85와는 별도입니다."
 )
 
+
+def is_openai_csv(path: Path) -> bool:
+    name = path.name.lower()
+    if "gemini" in name:
+        return False
+    try:
+        sample = pd.read_csv(path, nrows=20)
+    except Exception:
+        return name.startswith("openai_")
+
+    if "llm_provider" in sample.columns:
+        providers = sample["llm_provider"].fillna("").astype(str).str.strip().str.lower()
+        non_empty = providers[providers != ""]
+        if not non_empty.empty:
+            return bool((non_empty == "openai").all())
+    return name.startswith("openai_")
+
+
 results_dir = PROJECT_ROOT / "outputs" / "llm_results"
-csv_files = sorted(results_dir.glob("*.csv")) if results_dir.exists() else []
+csv_files = (
+    [path for path in sorted(results_dir.glob("*.csv")) if is_openai_csv(path)]
+    if results_dir.exists()
+    else []
+)
 
 if not csv_files:
-    st.info("먼저 LLM 자동화 UI에서 OpenAI 결과 CSV를 생성하세요.")
+    st.info("먼저 OpenAI GPT 자동화 UI에서 OpenAI 결과 CSV를 생성하세요.")
     st.stop()
 
 selected = st.selectbox(
-    "분석할 CSV",
+    "분석할 OpenAI CSV",
     csv_files,
     format_func=lambda path: path.name,
 )
@@ -49,7 +71,7 @@ c1, c2, c3, c4 = st.columns(4)
 c1.metric("Precision", f"{result['precision']:.3f}")
 c2.metric("Recall", f"{result['recall']:.3f}")
 c3.metric("F1", f"{result['f1']:.3f}")
-c4.metric("LLM 비교용 F2", f"{result['f2']:.3f}")
+c4.metric("GPT 비교용 F2", f"{result['f2']:.3f}")
 
 c1, c2 = st.columns(2)
 c1.metric("세부 라벨 평균 정확도", f"{result['detail_macro_accuracy']:.3f}")
