@@ -1,7 +1,8 @@
 """Build a human-review history CSV from reviewed JSON files.
 
-This first version records the latest saved reviewed JSON state and joins it with
-original labels and the most recent OpenAI result for the same image.
+The latest reviewed JSON state is joined with the matching original label row and
+the most recent OpenAI result. Matching includes relative_folder so duplicate
+image_id values under different errors subfolders do not collide.
 """
 
 from __future__ import annotations
@@ -52,6 +53,39 @@ def as_int(value: object) -> int:
         return 1 if text in {"o", "true", "yes", "y"} else 0
 
 
+def normalize_folder(value: object) -> str:
+    text = str(value or "").strip().replace("\\", "/")
+    if not text or text.lower() == "nan" or text == ".":
+        return "."
+    return text.strip("/") or "."
+
+
+def infer_relative_folder_from_image_path(image_path: object, split: object) -> str:
+    path_text = str(image_path or "").strip()
+    split_text = str(split or "").strip().lower()
+    if not path_text or not split_text or split_text == "nan":
+        return "."
+
+    path = Path(path_text)
+    parts = list(path.parts)
+    lower_parts = [part.lower() for part in parts]
+    split_indexes = [index for index, part in enumerate(lower_parts) if part == split_text]
+    if not split_indexes:
+        return "."
+
+    split_index = split_indexes[-1]
+    folder_parts = parts[split_index + 1 : -1]
+    return normalize_folder("/".join(folder_parts))
+
+
+def row_relative_folder(row: pd.Series | dict[str, Any]) -> str:
+    value = row.get("relative_folder", "")
+    normalized = normalize_folder(value)
+    if normalized != ".":
+        return normalized
+    return infer_relative_folder_from_image_path(row.get("image_path", ""), row.get("split", ""))
+
+
 def normalize_reviewed_json(path: Path) -> dict[str, Any]:
     state = get_label_state(load_json(path))
     labels = {
@@ -77,6 +111,7 @@ def load_latest_llm_rows(results_dir: Path) -> pd.DataFrame:
         if frame.empty or "image_id" not in frame.columns:
             continue
         frame = frame.copy()
+        frame["_relative_folder"] = frame.apply(row_relative_folder, axis=1)
         frame["_llm_csv"] = str(csv_path)
         frame["_llm_csv_mtime"] = csv_path.stat().st_mtime
         frames.append(frame)
@@ -85,16 +120,21 @@ def load_latest_llm_rows(results_dir: Path) -> pd.DataFrame:
         return pd.DataFrame()
 
     merged = pd.concat(frames, ignore_index=True, sort=False)
-    key_cols = [col for col in ["group", "split", "image_id"] if col in merged.columns]
-    if "image_id" not in key_cols:
+    required_key_cols = ["group", "split", "_relative_folder", "image_id"]
+    if not all(col in merged.columns for col in required_key_cols):
         return pd.DataFrame()
 
     merged = merged.sort_values("_llm_csv_mtime")
-    return merged.drop_duplicates(subset=key_cols, keep="last")
+    return merged.drop_duplicates(subset=required_key_cols, keep="last")
 
 
-def make_lookup_key(source: str, split: str, image_id: str) -> tuple[str, str, str]:
-    return (str(source).strip().lower(), str(split).strip().lower(), str(image_id).strip())
+def make_lookup_key(source: str, split: str, relative_folder: str, image_id: str) -> tuple[str, str, str, str]:
+    return (
+        str(source).strip().lower(),
+        str(split).strip().lower(),
+        normalize_folder(relative_folder).lower(),
+        str(image_id).strip(),
+    )
 
 
 def infer_review_location(reviewed_path: Path, reviewed_root: Path) -> tuple[str, str, str]:
@@ -102,7 +142,7 @@ def infer_review_location(reviewed_path: Path, reviewed_root: Path) -> tuple[str
     parts = relative.parts
     source = parts[0] if len(parts) >= 1 else "unknown"
     split = parts[1] if len(parts) >= 2 else "unknown"
-    folder = "/".join(parts[2:-1]) if len(parts) > 3 else "."
+    folder = normalize_folder("/".join(parts[2:-1])) if len(parts) > 3 else "."
     return source, split, folder
 
 
@@ -121,17 +161,33 @@ def build_review_history(
     if missing:
         raise ValueError(f"dataset_index.csv 필수 컬럼이 없습니다: {', '.join(missing)}")
 
-    index_lookup: dict[tuple[str, str, str], dict[str, Any]] = {}
+    index_lookup: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     for _, row in index_df.iterrows():
-        key = make_lookup_key(row.get("group", ""), row.get("split", ""), row.get("image_id", ""))
-        index_lookup[key] = row.to_dict()
+        relative_folder = row_relative_folder(row)
+        key = make_lookup_key(
+            row.get("group", ""),
+            row.get("split", ""),
+            relative_folder,
+            row.get("image_id", ""),
+        )
+        row_data = row.to_dict()
+        row_data["relative_folder"] = relative_folder
+        index_lookup[key] = row_data
 
     llm_df = load_latest_llm_rows(llm_results_dir)
-    llm_lookup: dict[tuple[str, str, str], dict[str, Any]] = {}
+    llm_lookup: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     if not llm_df.empty:
         for _, row in llm_df.iterrows():
-            key = make_lookup_key(row.get("group", ""), row.get("split", ""), row.get("image_id", ""))
-            llm_lookup[key] = row.to_dict()
+            relative_folder = normalize_folder(row.get("_relative_folder", "."))
+            key = make_lookup_key(
+                row.get("group", ""),
+                row.get("split", ""),
+                relative_folder,
+                row.get("image_id", ""),
+            )
+            row_data = row.to_dict()
+            row_data["relative_folder"] = relative_folder
+            llm_lookup[key] = row_data
 
     reviewed_files = sorted(reviewed_root.rglob("*.json")) if reviewed_root.exists() else []
     rows: list[dict[str, Any]] = []
@@ -139,7 +195,7 @@ def build_review_history(
     for reviewed_path in reviewed_files:
         source, split, relative_folder = infer_review_location(reviewed_path, reviewed_root)
         image_id = reviewed_path.stem.replace("_combined", "")
-        key = make_lookup_key(source, split, image_id)
+        key = make_lookup_key(source, split, relative_folder, image_id)
         original = index_lookup.get(key)
         if original is None:
             continue
@@ -154,6 +210,7 @@ def build_review_history(
             "source": source,
             "split": split,
             "relative_folder": relative_folder,
+            "error_type": relative_folder.split("/")[0] if source == "errors" and relative_folder != "." else "",
             "image_path": str(original.get("image_path", "")),
             "original_json_path": str(original.get("json_path", "")),
             "reviewed_json_path": str(reviewed_path),
