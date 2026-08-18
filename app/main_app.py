@@ -1,6 +1,6 @@
 """Unified Streamlit entrypoint.
 
-검수 UI, OpenAI 자동화 UI, 통계 UI, LLM 결과 분석, 검수 이력,
+검수 UI, OpenAI 자동화 UI, 통계 UI, OpenAI 결과 분석, 검수 이력,
 정제 데이터 내보내기를 하나의 Streamlit 서버에서 함께 사용한다.
 
 Run:
@@ -28,9 +28,9 @@ st.markdown(
 
 - **검수 UI**: `dataset/errors` 이미지를 보고 JSON 라벨을 수정합니다.
 - **OpenAI GPT 자동화 UI**: 데이터 인덱스 생성, GPT 자동판별, 라벨 비교, 검수 대상 CSV 생성을 실행합니다.
-- **통계 UI**: 생성된 CSV와 reviewed_json 저장 결과를 요약합니다.
-- **LLM 결과 분석**: GPT 결과와 현재 JSON 라벨의 일치·불일치 특성을 분석합니다.
-- **검수 이력**: 원본 라벨, GPT 결과, 사람이 확정한 라벨을 연결합니다.
+- **통계 UI**: OpenAI 결과 CSV와 reviewed_json 저장 결과를 요약합니다.
+- **OpenAI 결과 분석**: GPT 결과와 현재 JSON 라벨의 일치·불일치 특성을 분석합니다.
+- **검수 이력**: 원본 라벨, OpenAI GPT 결과, 사람이 확정한 라벨을 연결합니다.
 - **정제 데이터 내보내기**: reviewed_json을 우선 적용한 학습용 manifest와 JSON snapshot을 만듭니다.
 
 모든 화면은 하나의 Streamlit 앱에서 동작하므로 `localhost:8501` 하나만 사용합니다.
@@ -51,19 +51,19 @@ with col2:
 
 with col3:
     st.subheader("통계 UI")
-    st.write("CSV 결과와 reviewed_json 저장 현황을 요약합니다.")
+    st.write("OpenAI CSV 결과와 reviewed_json 저장 현황을 요약합니다.")
     st.page_link("pages/3_통계_UI.py", label="통계 UI 열기", icon="📊")
 
 col4, col5, col6 = st.columns(3)
 
 with col4:
-    st.subheader("LLM 결과 분석")
+    st.subheader("OpenAI 결과 분석")
     st.write("GPT 결과를 현재 JSON 라벨과 비교하되 최종 모델 F2와 분리해 봅니다.")
-    st.page_link("pages/4_LLM_결과_분석.py", label="LLM 결과 분석 열기", icon="🔎")
+    st.page_link("pages/4_LLM_결과_분석.py", label="OpenAI 결과 분석 열기", icon="🔎")
 
 with col5:
     st.subheader("검수 이력")
-    st.write("원본·GPT·사람 최종 라벨과 수정 항목을 CSV로 정리합니다.")
+    st.write("원본·OpenAI GPT·사람 최종 라벨과 수정 항목을 CSV로 정리합니다.")
     st.page_link("pages/5_검수_이력.py", label="검수 이력 열기", icon="📝")
 
 with col6:
