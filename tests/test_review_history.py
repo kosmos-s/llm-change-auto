@@ -1,4 +1,4 @@
-"""Tests for review-history matching across errors subfolders."""
+"""Tests for review-history matching and OpenAI-only result selection."""
 
 from __future__ import annotations
 
@@ -89,6 +89,7 @@ class ReviewHistoryTest(unittest.TestCase):
                         "group": "errors",
                         "split": "train",
                         "image_path": str(artifact_image),
+                        "llm_provider": "openai",
                         "llm_change": 0,
                         "confidence": 0.8,
                     },
@@ -97,6 +98,7 @@ class ReviewHistoryTest(unittest.TestCase):
                         "group": "errors",
                         "split": "train",
                         "image_path": str(farmland_image),
+                        "llm_provider": "openai",
                         "llm_change": 1,
                         "farm": 1,
                         "confidence": 0.9,
@@ -129,6 +131,73 @@ class ReviewHistoryTest(unittest.TestCase):
             self.assertIn("farmland_fp_00", farmland_row["image_path"])
             self.assertEqual(int(farmland_row["llm_change"]), 1)
             self.assertEqual(int(farmland_row["human_change"]), 1)
+
+    def test_gemini_result_is_ignored_when_openai_result_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            index_path = root / "dataset_index.csv"
+            reviewed_root = root / "reviewed_json"
+            llm_dir = root / "llm_results"
+            output_path = root / "review_history.csv"
+            llm_dir.mkdir(parents=True)
+
+            image_id = "00_1234"
+            image_path = root / "dataset_sample" / "dataset" / "train" / f"{image_id}_combined.jpg"
+            pd.DataFrame(
+                [
+                    {
+                        "image_id": image_id,
+                        "group": "dataset",
+                        "split": "train",
+                        "relative_folder": ".",
+                        "image_path": str(image_path),
+                        "json_path": str(image_path.with_suffix(".json")),
+                        "original_change": 0,
+                    }
+                ]
+            ).to_csv(index_path, index=False, encoding="utf-8-sig")
+
+            pd.DataFrame(
+                [
+                    {
+                        "image_id": image_id,
+                        "group": "dataset",
+                        "split": "train",
+                        "image_path": str(image_path),
+                        "llm_provider": "openai",
+                        "llm_change": 0,
+                        "confidence": 0.9,
+                    }
+                ]
+            ).to_csv(llm_dir / "openai_dataset_train_1.csv", index=False, encoding="utf-8-sig")
+
+            pd.DataFrame(
+                [
+                    {
+                        "image_id": image_id,
+                        "group": "dataset",
+                        "split": "train",
+                        "image_path": str(image_path),
+                        "llm_provider": "gemini",
+                        "llm_change": 1,
+                        "confidence": 0.99,
+                    }
+                ]
+            ).to_csv(llm_dir / "gemini_dataset_train_1.csv", index=False, encoding="utf-8-sig")
+
+            write_review_json(reviewed_root / "dataset" / "train" / f"{image_id}_combined.json")
+
+            result = build_review_history(
+                index_csv=index_path,
+                reviewed_root=reviewed_root,
+                llm_results_dir=llm_dir,
+                output_csv=output_path,
+            )
+
+            self.assertEqual(len(result), 1)
+            self.assertEqual(result.iloc[0]["llm_provider"], "openai")
+            self.assertEqual(int(result.iloc[0]["llm_change"]), 0)
+            self.assertIn("openai_dataset_train_1.csv", result.iloc[0]["llm_result_csv"])
 
 
 if __name__ == "__main__":
