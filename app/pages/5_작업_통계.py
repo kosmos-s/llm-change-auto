@@ -1,4 +1,4 @@
-"""Statistics dashboard for OpenAI-based LLM Change Auto."""
+"""Project progress and OpenAI/review statistics dashboard."""
 
 from __future__ import annotations
 
@@ -10,61 +10,11 @@ import streamlit as st
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
-
-CSV_GROUPS = {
-    "dataset_index": OUTPUTS_DIR / "dataset_index.csv",
-    "llm_results": OUTPUTS_DIR / "llm_results",
-    "compare_results": OUTPUTS_DIR / "compare_results",
-    "review_lists": OUTPUTS_DIR / "review_lists",
-}
-
 TRUE_VALUES = {"true", "1", "yes", "y", "o"}
-LABEL_KEYS = [
-    "arti",
-    "arti_bu",
-    "arti_bu_t",
-    "arti_binil",
-    "arti_road",
-    "arti_roa_m",
-    "arti_other",
-    "tree",
-    "fore",
-    "farm",
-    "water",
-]
+LABEL_KEYS = ["arti", "arti_bu", "arti_bu_t", "arti_binil", "arti_road", "arti_roa_m", "arti_other", "tree", "fore", "farm", "water"]
 
-
-st.title("작업 통계")
-st.caption("OpenAI 결과 CSV와 reviewed_json 저장 결과만 기준으로 요약합니다.")
-
-
-def is_openai_csv(path: Path) -> bool:
-    name = path.name.lower()
-    if "gemini" in name:
-        return False
-    try:
-        header = pd.read_csv(path, nrows=20)
-    except Exception:
-        return name.startswith("openai_")
-
-    if "llm_provider" in header.columns:
-        providers = header["llm_provider"].fillna("").astype(str).str.strip().str.lower()
-        non_empty = providers[providers != ""]
-        if not non_empty.empty:
-            return bool((non_empty == "openai").all())
-    return name.startswith("openai_")
-
-
-def list_csv_files(kind: str) -> list[Path]:
-    target = CSV_GROUPS[kind]
-    if target.is_file():
-        return [target]
-    if target.is_dir():
-        files = sorted(target.glob("*.csv"))
-        if kind != "dataset_index":
-            files = [path for path in files if is_openai_csv(path)]
-        return files
-    return []
+st.title("5. 작업 통계")
+st.caption("3,000건 목표 진행률, OpenAI 처리, 사람 검수, 수정률과 confidence 특성을 한 화면에서 확인합니다.")
 
 
 def read_csv(path: Path) -> pd.DataFrame | None:
@@ -72,192 +22,208 @@ def read_csv(path: Path) -> pd.DataFrame | None:
         return None
     try:
         return pd.read_csv(path)
-    except Exception as exc:
-        st.error(f"CSV를 읽을 수 없습니다: {path}\n{exc}")
+    except Exception:
         return None
 
 
-def is_true_series(series: pd.Series) -> pd.Series:
+def is_true(series: pd.Series) -> pd.Series:
     return series.fillna("").astype(str).str.strip().str.lower().isin(TRUE_VALUES)
 
 
-def metric_row(metrics: list[tuple[str, Any]]) -> None:
-    cols = st.columns(len(metrics))
-    for col, (label, value) in zip(cols, metrics):
-        col.metric(label, value)
-
-
-def show_basic_metrics(df: pd.DataFrame) -> None:
-    metrics: list[tuple[str, Any]] = [("전체 행", len(df)), ("컬럼 수", len(df.columns))]
-
-    if "error" in df.columns:
-        error_count = df["error"].fillna("").astype(str).str.strip().ne("").sum()
-        metrics.append(("OpenAI 오류", int(error_count)))
-
-    if "review_required_final" in df.columns:
-        review_count = is_true_series(df["review_required_final"]).sum()
-        metrics.append(("검수 필요", int(review_count)))
-
-    if "label_mismatch" in df.columns:
-        mismatch_count = is_true_series(df["label_mismatch"]).sum()
-        metrics.append(("변화유무 불일치", int(mismatch_count)))
-
-    if "detail_mismatch" in df.columns:
-        detail_count = is_true_series(df["detail_mismatch"]).sum()
-        metrics.append(("세부라벨 불일치", int(detail_count)))
-
-    if "confidence" in df.columns:
-        confidence = pd.to_numeric(df["confidence"], errors="coerce")
-        mean_value = confidence.mean()
-        metrics.append(("평균 confidence", "-" if pd.isna(mean_value) else f"{mean_value:.3f}"))
-
-    for start in range(0, len(metrics), 4):
-        metric_row(metrics[start : start + 4])
-
-
-def show_group_counts(df: pd.DataFrame) -> None:
-    st.markdown("### 분포")
-
-    if "group" in df.columns and "split" in df.columns:
-        st.markdown("**dataset/errors · split 개수**")
-        table = df.groupby(["group", "split"], dropna=False).size().reset_index(name="count")
-        st.dataframe(table, use_container_width=True, hide_index=True)
-
-    if "source" in df.columns and "split" in df.columns:
-        st.markdown("**source · split 개수**")
-        table = df.groupby(["source", "split"], dropna=False).size().reset_index(name="count")
-        st.dataframe(table, use_container_width=True, hide_index=True)
-
-    if "review_reasons" in df.columns:
-        st.markdown("**검수 사유별 개수**")
-        reason_rows = []
-        for value in df["review_reasons"].fillna("").astype(str):
-            reasons = [reason.strip() for reason in value.split(",") if reason.strip()]
-            for reason in reasons or ["-"]:
-                reason_rows.append(reason)
-        reason_df = pd.DataFrame({"review_reason": reason_rows})
-        table = reason_df.groupby("review_reason").size().reset_index(name="count").sort_values("count", ascending=False)
-        st.dataframe(table, use_container_width=True, hide_index=True)
-
-    if "llm_class" in df.columns:
-        st.markdown("**GPT class별 개수**")
-        table = df.groupby("llm_class", dropna=False).size().reset_index(name="count").sort_values("count", ascending=False)
-        st.dataframe(table, use_container_width=True, hide_index=True)
-
-
-def show_label_counts(df: pd.DataFrame) -> None:
-    available_original = [f"original_{key}" for key in LABEL_KEYS if f"original_{key}" in df.columns]
-    available_llm = [key for key in LABEL_KEYS if key in df.columns]
-
-    if not available_original and not available_llm:
-        return
-
-    st.markdown("### 라벨별 개수")
+def reviewed_inventory() -> pd.DataFrame:
+    root = OUTPUTS_DIR / "reviewed_json"
     rows = []
-    for key in LABEL_KEYS:
-        original_col = f"original_{key}"
-        llm_col = key
-        row = {"label": key}
-        if original_col in df.columns:
-            row["original"] = int(pd.to_numeric(df[original_col], errors="coerce").fillna(0).sum())
-        if llm_col in df.columns:
-            row["gpt"] = int(pd.to_numeric(df[llm_col], errors="coerce").fillna(0).sum())
-        rows.append(row)
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-
-def show_confidence_stats(df: pd.DataFrame) -> None:
-    if "confidence" not in df.columns:
-        return
-
-    confidence = pd.to_numeric(df["confidence"], errors="coerce").dropna()
-    if confidence.empty:
-        return
-
-    st.markdown("### Confidence 통계")
-    desc = confidence.describe().reset_index()
-    desc.columns = ["stat", "value"]
-    st.dataframe(desc, use_container_width=True, hide_index=True)
-
-    threshold = st.slider("low confidence 기준", 0.0, 1.0, 0.70, 0.05)
-    low_count = int((confidence < threshold).sum())
-    st.info(f"confidence < {threshold:.2f}: {low_count}개")
-
-
-def show_reviewed_json_stats() -> None:
-    st.markdown("## reviewed_json 저장 현황")
-    reviewed_root = OUTPUTS_DIR / "reviewed_json"
-    json_files = sorted(reviewed_root.rglob("*.json")) if reviewed_root.exists() else []
-
-    metric_row([("저장된 reviewed_json", len(json_files))])
-
-    if not json_files:
-        st.info("아직 outputs/reviewed_json에 저장된 JSON이 없습니다.")
-        return
-
-    rows = []
-    for path in json_files:
+    if not root.exists():
+        return pd.DataFrame()
+    for path in root.rglob("*.json"):
         try:
-            rel = path.relative_to(reviewed_root)
+            rel = path.relative_to(root)
         except ValueError:
-            rel = path
+            continue
         parts = rel.parts
         source = parts[0] if len(parts) >= 1 else "unknown"
         split = parts[1] if len(parts) >= 2 else "unknown"
         folder = "/".join(parts[2:-1]) if len(parts) > 3 else "."
-        rows.append(
-            {
-                "source": source,
-                "split": split,
-                "folder": folder,
-                "filename": path.name,
-                "path": str(path),
-            }
-        )
-    df = pd.DataFrame(rows)
-    st.dataframe(df.groupby(["source", "split"], dropna=False).size().reset_index(name="count"), use_container_width=True, hide_index=True)
-    with st.expander("저장 파일 목록", expanded=False):
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        rows.append({"source": source, "split": split, "relative_folder": folder, "error_type": folder.split("/")[0] if source == "errors" and folder != "." else "", "filename": path.name})
+    return pd.DataFrame(rows)
 
 
-def show_csv_section() -> None:
-    st.markdown("## CSV 결과 통계")
-    st.info("Gemini 등 과거 Provider 결과는 목록에서 자동 제외하고 OpenAI 결과만 표시합니다.")
+def unique_openai_results() -> pd.DataFrame:
+    root = OUTPUTS_DIR / "llm_results"
+    frames = []
+    if not root.exists():
+        return pd.DataFrame()
+    for path in sorted(root.glob("*.csv")):
+        try:
+            df = pd.read_csv(path)
+        except Exception:
+            continue
+        if df.empty or "image_id" not in df.columns:
+            continue
+        if "llm_provider" in df.columns:
+            provider = df["llm_provider"].fillna("").astype(str).str.lower()
+            df = df[(provider == "openai") | (provider == "")]
+        if df.empty:
+            continue
+        df = df.copy()
+        df["_file"] = str(path)
+        df["_mtime"] = path.stat().st_mtime
+        frames.append(df)
+    if not frames:
+        return pd.DataFrame()
+    merged = pd.concat(frames, ignore_index=True, sort=False)
+    for col in ["group", "split", "relative_folder", "image_id"]:
+        if col not in merged.columns:
+            merged[col] = ""
+    return merged.sort_values("_mtime").drop_duplicates(["group", "split", "relative_folder", "image_id"], keep="last")
 
-    kind = st.selectbox(
-        "CSV 종류",
-        ["dataset_index", "llm_results", "compare_results", "review_lists"],
-        format_func=lambda value: {
-            "dataset_index": "dataset_index.csv",
-            "llm_results": "OpenAI 결과 CSV",
-            "compare_results": "OpenAI 비교 결과 CSV",
-            "review_lists": "OpenAI 검수 대상 CSV",
-        }[value],
-    )
 
-    files = list_csv_files(kind)
-    if not files:
-        st.info("해당 OpenAI CSV 파일이 아직 없습니다.")
+def show_project_progress() -> None:
+    goal = int(st.number_input("프로젝트 사람 검수 목표", min_value=1, value=3000, step=100))
+    reviewed = reviewed_inventory()
+    llm = unique_openai_results()
+    reviewed_count = len(reviewed)
+    llm_count = len(llm)
+    errors = 0
+    if not llm.empty and "error" in llm.columns:
+        errors = int(llm["error"].fillna("").astype(str).str.strip().ne("").sum())
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("OpenAI 판정 완료(고유)", llm_count)
+    c2.metric("사람 검수 완료", reviewed_count)
+    c3.metric("목표까지 남음", max(goal - reviewed_count, 0))
+    c4.metric("현재 OpenAI 오류", errors)
+    ratio = min(reviewed_count / goal, 1.0)
+    st.progress(ratio, text=f"사람 검수 목표 진행률 {reviewed_count:,}/{goal:,} ({ratio:.1%})")
+
+    if not reviewed.empty:
+        st.markdown("### split별 사람 검수 진행")
+        split_goal = max(goal // 3, 1)
+        rows = []
+        for split in ["train", "val", "test"]:
+            count = int((reviewed["split"].astype(str) == split).sum())
+            rows.append({"split": split, "reviewed": count, "권장목표": split_goal, "진행률": min(count / split_goal, 1.0)})
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        errors_reviewed = reviewed[reviewed["source"].astype(str) == "errors"]
+        if not errors_reviewed.empty:
+            st.markdown("### errors 유형별 검수 완료")
+            table = errors_reviewed.groupby("error_type", dropna=False).size().reset_index(name="reviewed").sort_values("reviewed", ascending=False)
+            st.dataframe(table, use_container_width=True, hide_index=True)
+
+
+def show_review_quality() -> None:
+    history_path = OUTPUTS_DIR / "review_history" / "review_history.csv"
+    history = read_csv(history_path)
+    st.markdown("## 사람 검수 품질 통계")
+    if history is None or history.empty:
+        st.info("3. 검수 이력에서 `검수 이력 갱신`을 먼저 실행하세요.")
         return
 
-    selected = st.selectbox("파일 선택", files, format_func=lambda path: str(path.relative_to(PROJECT_ROOT)))
+    modified = is_true(history["labels_modified"]) if "labels_modified" in history.columns else pd.Series(False, index=history.index)
+    llm_available = history["llm_change"].notna() & history["llm_change"].astype(str).str.strip().ne("") if "llm_change" in history.columns else pd.Series(False, index=history.index)
+    match = is_true(history["llm_human_change_match"]) if "llm_human_change_match" in history.columns else pd.Series(False, index=history.index)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("검수 이력", len(history))
+    c2.metric("원본 수정", int(modified.sum()))
+    c3.metric("원본 수정률", f"{modified.mean():.1%}" if len(history) else "-")
+    c4.metric("GPT-사람 일치율", f"{(match & llm_available).sum()/llm_available.sum():.1%}" if llm_available.sum() else "-")
+
+    if "error_type" in history.columns:
+        tmp = history.copy()
+        tmp["modified"] = modified.astype(int)
+        grouped = tmp.groupby("error_type", dropna=False).agg(reviewed=("image_id", "count"), modified=("modified", "sum")).reset_index()
+        grouped["수정률"] = grouped["modified"] / grouped["reviewed"].clip(lower=1)
+        st.markdown("### 오류유형별 원본 수정률")
+        st.dataframe(grouped.sort_values("수정률", ascending=False), use_container_width=True, hide_index=True)
+
+    label_rows = []
+    for label in LABEL_KEYS:
+        col = f"human_{label}"
+        original_col = f"original_{label}"
+        if col in history.columns and original_col in history.columns:
+            h = pd.to_numeric(history[col], errors="coerce").fillna(0).astype(int)
+            o = pd.to_numeric(history[original_col], errors="coerce").fillna(0).astype(int)
+            label_rows.append({"label": label, "검수건수": len(history), "수정건수": int((h != o).sum()), "수정률": float((h != o).mean())})
+    if label_rows:
+        st.markdown("### 클래스별 수정률")
+        st.dataframe(pd.DataFrame(label_rows).sort_values("수정률", ascending=False), use_container_width=True, hide_index=True)
+
+    if "llm_confidence" in history.columns and "llm_human_change_match" in history.columns:
+        conf = pd.to_numeric(history["llm_confidence"], errors="coerce")
+        tmp = history[llm_available].copy()
+        tmp["confidence_num"] = pd.to_numeric(tmp["llm_confidence"], errors="coerce")
+        tmp["match_num"] = is_true(tmp["llm_human_change_match"]).astype(int)
+        tmp["confidence_bin"] = pd.cut(tmp["confidence_num"], bins=[0, .5, .7, .85, 1.000001], include_lowest=True)
+        conf_table = tmp.groupby("confidence_bin", observed=False).agg(count=("image_id", "count"), gpt_human_match=("match_num", "mean")).reset_index()
+        st.markdown("### Confidence 구간별 GPT-사람 일치율")
+        st.dataframe(conf_table, use_container_width=True, hide_index=True)
+
+
+def show_review_reason_stats() -> None:
+    st.markdown("## 검수 대상 선정 이유")
+    root = OUTPUTS_DIR / "review_lists"
+    frames = []
+    if root.exists():
+        for path in root.glob("*.csv"):
+            try:
+                df = pd.read_csv(path)
+            except Exception:
+                continue
+            if not df.empty:
+                frames.append(df)
+    if not frames:
+        st.info("검수 목록 CSV가 아직 없습니다.")
+        return
+    df = pd.concat(frames, ignore_index=True, sort=False)
+    if "review_reasons" in df.columns:
+        reasons = []
+        for value in df["review_reasons"].fillna("").astype(str):
+            for reason in [r.strip() for r in value.split(",") if r.strip()] or ["-"]:
+                reasons.append(reason)
+        table = pd.Series(reasons).value_counts().rename_axis("reason").reset_index(name="count")
+        st.dataframe(table, use_container_width=True, hide_index=True)
+    if "priority_score" in df.columns:
+        st.caption("priority_score가 높은 항목부터 사람 검수하도록 정렬됩니다.")
+        st.dataframe(df.sort_values("priority_score", ascending=False).head(30), use_container_width=True)
+
+
+def show_csv_browser() -> None:
+    st.markdown("## 개별 결과 CSV 보기")
+    kinds = {
+        "dataset_index": OUTPUTS_DIR / "dataset_index.csv",
+        "llm_results": OUTPUTS_DIR / "llm_results",
+        "compare_results": OUTPUTS_DIR / "compare_results",
+        "review_lists": OUTPUTS_DIR / "review_lists",
+    }
+    kind = st.selectbox("종류", list(kinds), format_func=lambda v: {"dataset_index": "dataset_index", "llm_results": "OpenAI 결과", "compare_results": "비교 결과", "review_lists": "검수 목록"}[v])
+    target = kinds[kind]
+    if target.is_file():
+        files = [target]
+    elif target.exists():
+        files = sorted(target.glob("*.csv"))
+    else:
+        files = []
+    if not files:
+        st.info("파일이 없습니다.")
+        return
+    selected = st.selectbox("파일", files, format_func=lambda p: p.name)
     df = read_csv(selected)
     if df is None:
         return
-
-    st.caption(str(selected))
-    show_basic_metrics(df)
-    show_group_counts(df)
-    show_label_counts(df)
-    show_confidence_stats(df)
-
-    with st.expander("CSV 미리보기", expanded=False):
-        st.dataframe(df.head(100), use_container_width=True)
-
-    csv_bytes = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
-    st.download_button("현재 CSV 다운로드", csv_bytes, file_name=selected.name, mime="text/csv")
+    c1, c2 = st.columns(2)
+    c1.metric("Rows", len(df))
+    if "error" in df.columns:
+        c2.metric("오류", int(df["error"].fillna("").astype(str).str.strip().ne("").sum()))
+    else:
+        c2.metric("Columns", len(df.columns))
+    st.dataframe(df.head(200), use_container_width=True)
 
 
-show_csv_section()
+show_project_progress()
 st.divider()
-show_reviewed_json_stats()
+show_review_quality()
+st.divider()
+show_review_reason_stats()
+st.divider()
+show_csv_browser()
