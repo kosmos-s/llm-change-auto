@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -93,11 +94,22 @@ def sanitize_error_message(error: Exception | str) -> str:
     return message
 
 
-def ask_openai_vision(
+def _usage_value(usage: Any, name: str) -> int:
+    if usage is None:
+        return 0
+    value = getattr(usage, name, 0)
+    try:
+        return int(value or 0)
+    except Exception:
+        return 0
+
+
+def ask_openai_vision_with_meta(
     image_path: str | Path,
     prompt: str,
     model: str = "gpt-4o-mini",
-) -> str:
+) -> dict[str, Any]:
+    """Run one vision request and return text plus token usage metadata."""
     if not os.getenv("OPENAI_API_KEY"):
         raise RuntimeError("OPENAI_API_KEY가 설정되지 않았습니다. 로컬 .env 파일을 확인하세요.")
 
@@ -116,8 +128,8 @@ def ask_openai_vision(
     mime_type = get_mime_type(image_path)
     timeout_seconds = float(os.getenv("OPENAI_TIMEOUT", "60"))
 
-    # OpenAI SDK reads OPENAI_API_KEY directly from the environment.
-    client = OpenAI(timeout=timeout_seconds, max_retries=2)
+    # SDK 자체 재시도는 최소 수준으로 두고, 배치 재시도는 run_llm_labeling.py에서 관리한다.
+    client = OpenAI(timeout=timeout_seconds, max_retries=1)
     response = client.responses.create(
         model=model,
         input=[
@@ -149,4 +161,24 @@ def ask_openai_vision(
     output_text = response.output_text or ""
     if not output_text.strip():
         raise RuntimeError("OpenAI 응답에 출력 텍스트가 없습니다.")
-    return output_text
+
+    usage = getattr(response, "usage", None)
+    input_tokens = _usage_value(usage, "input_tokens")
+    output_tokens = _usage_value(usage, "output_tokens")
+    total_tokens = _usage_value(usage, "total_tokens") or input_tokens + output_tokens
+    return {
+        "text": output_text,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "response_id": str(getattr(response, "id", "") or ""),
+    }
+
+
+def ask_openai_vision(
+    image_path: str | Path,
+    prompt: str,
+    model: str = "gpt-4o-mini",
+) -> str:
+    """Backward-compatible text-only helper."""
+    return str(ask_openai_vision_with_meta(image_path, prompt, model=model)["text"])
