@@ -38,6 +38,23 @@ def normalize_folder(value: object) -> str:
     return text.strip("/") or "."
 
 
+def normalize_error(value: object) -> str:
+    """Normalize an error cell loaded from CSV.
+
+    Empty CSV cells are read by pandas as NaN by default. Resume logic must treat
+    those values as successful rows, not as the literal error string ``nan``.
+    """
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    text = str(value).strip()
+    return "" if text.lower() == "nan" else text
+
+
 def row_key(row: pd.Series | dict[str, Any]) -> str:
     return "|".join(
         [
@@ -145,7 +162,9 @@ def _load_existing(path: Path) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
     try:
-        df = pd.read_csv(path)
+        # Preserve blank cells as empty strings. This is especially important for the
+        # `error` column: a blank error means the previous OpenAI call succeeded.
+        df = pd.read_csv(path, keep_default_na=False)
     except Exception:
         return pd.DataFrame()
     if df.empty:
@@ -173,18 +192,39 @@ def _public_frame(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop(columns=["_row_key"], errors="ignore")
 
 
-def _estimated_cost(input_tokens: int, output_tokens: int, input_price_per_million: float, output_price_per_million: float) -> float:
-    return (input_tokens / 1_000_000.0) * input_price_per_million + (output_tokens / 1_000_000.0) * output_price_per_million
+def _estimated_cost(
+    input_tokens: int,
+    output_tokens: int,
+    input_price_per_million: float,
+    output_price_per_million: float,
+) -> float:
+    return (input_tokens / 1_000_000.0) * input_price_per_million + (
+        output_tokens / 1_000_000.0
+    ) * output_price_per_million
 
 
 def _totals(df: pd.DataFrame) -> tuple[float, int, int, int]:
     if df.empty:
         return 0.0, 0, 0, 0
-    cost = float(pd.to_numeric(df.get("estimated_cost_usd", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
-    input_tokens = int(pd.to_numeric(df.get("input_tokens", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
-    output_tokens = int(pd.to_numeric(df.get("output_tokens", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
+    cost = float(
+        pd.to_numeric(
+            df.get("estimated_cost_usd", pd.Series(dtype=float)), errors="coerce"
+        )
+        .fillna(0)
+        .sum()
+    )
+    input_tokens = int(
+        pd.to_numeric(df.get("input_tokens", pd.Series(dtype=float)), errors="coerce")
+        .fillna(0)
+        .sum()
+    )
+    output_tokens = int(
+        pd.to_numeric(df.get("output_tokens", pd.Series(dtype=float)), errors="coerce")
+        .fillna(0)
+        .sum()
+    )
     if "error" in df.columns:
-        error_count = int(df["error"].fillna("").astype(str).str.strip().ne("").sum())
+        error_count = int(df["error"].apply(normalize_error).ne("").sum())
     else:
         error_count = 0
     return cost, input_tokens, output_tokens, error_count
@@ -231,7 +271,9 @@ def run(
         exclude_reviewed_root=exclude_reviewed_root,
     )
     if df.empty:
-        raise ValueError(f"OpenAI 실행 대상이 없습니다. source={source}, split={split}, input={input_csv}")
+        raise ValueError(
+            f"OpenAI 실행 대상이 없습니다. source={source}, split={split}, input={input_csv}"
+        )
 
     base_prompt = load_prompt(prompt_path)
     run_id = run_id or datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -254,7 +296,8 @@ def run(
             if not retry_errors_only:
                 work_rows.append(row)
             continue
-        previous_error = str(previous.get("error", "") or "").strip()
+
+        previous_error = normalize_error(previous.get("error", ""))
         if previous_error:
             if retry_failed or retry_errors_only:
                 work_rows.append(row)
@@ -267,7 +310,9 @@ def run(
         raise ValueError("현재 결과 CSV에서 재시도할 실패 항목이 없습니다.")
 
     total_to_run = len(work_rows)
-    cumulative_cost, cumulative_input_tokens, cumulative_output_tokens, current_errors = _totals(_public_frame(existing))
+    cumulative_cost, cumulative_input_tokens, cumulative_output_tokens, current_errors = _totals(
+        _public_frame(existing)
+    )
     started = time.monotonic()
     stop_reason = ""
 
@@ -347,7 +392,12 @@ def run(
         input_tokens = int(meta.get("input_tokens", 0) or 0)
         output_tokens = int(meta.get("output_tokens", 0) or 0)
         total_tokens = int(meta.get("total_tokens", input_tokens + output_tokens) or 0)
-        row_cost = _estimated_cost(input_tokens, output_tokens, input_price_per_million, output_price_per_million)
+        row_cost = _estimated_cost(
+            input_tokens,
+            output_tokens,
+            input_price_per_million,
+            output_price_per_million,
+        )
 
         result_row["attempt_count"] = attempt
         result_row["input_tokens"] = input_tokens
@@ -440,10 +490,22 @@ def main() -> None:
     parser.add_argument("--no-resume", action="store_true")
     parser.add_argument("--retry-errors-only", action="store_true")
     parser.add_argument("--max-attempts", type=int, default=3)
-    parser.add_argument("--selection-mode", choices=["sequential", "random", "balanced"], default="sequential")
+    parser.add_argument(
+        "--selection-mode",
+        choices=["sequential", "random", "balanced"],
+        default="sequential",
+    )
     parser.add_argument("--exclude-reviewed", default="outputs/reviewed_json")
-    parser.add_argument("--input-price", type=float, default=float(os.getenv("OPENAI_INPUT_PRICE_PER_1M", "0") or 0))
-    parser.add_argument("--output-price", type=float, default=float(os.getenv("OPENAI_OUTPUT_PRICE_PER_1M", "0") or 0))
+    parser.add_argument(
+        "--input-price",
+        type=float,
+        default=float(os.getenv("OPENAI_INPUT_PRICE_PER_1M", "0") or 0),
+    )
+    parser.add_argument(
+        "--output-price",
+        type=float,
+        default=float(os.getenv("OPENAI_OUTPUT_PRICE_PER_1M", "0") or 0),
+    )
     parser.add_argument("--cost-limit", type=float, default=0.0)
     args = parser.parse_args()
 
