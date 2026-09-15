@@ -13,7 +13,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from make_review_list import make_review_list
-from run_llm_labeling import filter_dataframe
+from run_llm_labeling import _load_existing, filter_dataframe, normalize_error
 
 
 class BatchSafetyTest(unittest.TestCase):
@@ -86,6 +86,26 @@ class BatchSafetyTest(unittest.TestCase):
             result = make_review_list(compare, output)
             self.assertEqual(result.iloc[0]["image_id"], "api")
             self.assertGreater(result.iloc[0]["priority_score"], result.iloc[1]["priority_score"])
+
+    def test_resume_treats_blank_error_as_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "result.csv"
+            pd.DataFrame(
+                [
+                    {
+                        "image_id": "id0",
+                        "group": "errors",
+                        "split": "train",
+                        "relative_folder": ".",
+                        "error": "",
+                    }
+                ]
+            ).to_csv(csv_path, index=False, encoding="utf-8-sig")
+
+            loaded = _load_existing(csv_path)
+            self.assertEqual(normalize_error(loaded.iloc[0]["error"]), "")
+            self.assertEqual(normalize_error(float("nan")), "")
+            self.assertEqual(normalize_error("timeout"), "timeout")
 
 
 if __name__ == "__main__":
