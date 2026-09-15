@@ -8,30 +8,32 @@ from pathlib import Path
 import pandas as pd
 
 LABEL_KEYS = [
-    "arti",
-    "arti_bu",
-    "arti_bu_t",
-    "arti_binil",
-    "arti_road",
-    "arti_roa_m",
-    "arti_other",
-    "tree",
-    "fore",
-    "farm",
-    "water",
+    "arti", "arti_bu", "arti_bu_t", "arti_binil", "arti_road", "arti_roa_m",
+    "arti_other", "tree", "fore", "farm", "water",
 ]
 
 
 def as_int(value: object) -> int:
     try:
+        if pd.isna(value):
+            return 0
+    except Exception:
+        pass
+    try:
         return int(float(value))
     except Exception:
-        return 0
+        text = str(value).strip().lower()
+        return 1 if text in {"o", "true", "yes", "y"} else 0
 
 
 def as_bool(value: object, default: bool = False) -> bool:
     if value is None:
         return default
+    try:
+        if pd.isna(value):
+            return default
+    except Exception:
+        pass
     if isinstance(value, bool):
         return value
     text = str(value).strip().lower()
@@ -44,9 +46,26 @@ def as_bool(value: object, default: bool = False) -> bool:
 
 def as_float(value: object, default: float = 0.0) -> float:
     try:
+        if pd.isna(value):
+            return default
+    except Exception:
+        pass
+    try:
         return float(value)
     except Exception:
         return default
+
+
+def clean_text(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    text = str(value).strip()
+    return "" if text.lower() == "nan" else text
 
 
 def compare(input_csv: Path, output_csv: Path, confidence_threshold: float = 0.70) -> None:
@@ -68,8 +87,8 @@ def compare(input_csv: Path, output_csv: Path, confidence_threshold: float = 0.7
         detail_mismatch = bool(detail_mismatch_keys)
         low_confidence = confidence < confidence_threshold
         empty_class_when_change = llm_change == 1 and not any(as_int(row.get(k, 0)) for k in LABEL_KEYS)
-        llm_error = bool(str(row.get("error", "")).strip())
-        llm_self_review = as_bool(row.get("review_required", True), default=True)
+        llm_error = bool(clean_text(row.get("error", "")))
+        llm_self_review = as_bool(row.get("review_required", False), default=False)
 
         review_reasons = []
         if llm_error:
@@ -106,7 +125,6 @@ def main() -> None:
     parser.add_argument("--output", default="outputs/compare_results/compare_results.csv")
     parser.add_argument("--confidence-threshold", type=float, default=0.70)
     args = parser.parse_args()
-
     compare(Path(args.llm), Path(args.output), args.confidence_threshold)
 
 
