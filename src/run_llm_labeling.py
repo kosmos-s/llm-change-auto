@@ -29,11 +29,6 @@ from prompt_builder import build_prompt, load_prompt
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
-LABEL_RESULT_KEYS = [
-    "llm_change", "llm_class", "confidence", "review_required", "arti", "arti_bu",
-    "arti_bu_t", "arti_binil", "arti_road", "arti_roa_m", "arti_other", "tree",
-    "fore", "farm", "water", "reason_ko", "reason_en", "raw_response", "error",
-]
 
 
 def normalize_folder(value: object) -> str:
@@ -69,19 +64,17 @@ def reviewed_json_exists(row: pd.Series, reviewed_root: Path | None) -> bool:
     return (target / json_path.name).exists()
 
 
-def _balanced_rows(df: pd.DataFrame, limit: int | None) -> pd.DataFrame:
+def _balanced_rows(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or "error_type" not in df.columns:
-        return df.head(limit) if limit else df
+        return df.reset_index(drop=True)
     groups = [group.reset_index(drop=True) for _, group in df.groupby("error_type", dropna=False, sort=True)]
     rows: list[pd.Series] = []
     index = 0
-    while groups and (limit is None or len(rows) < limit):
+    while groups:
         next_groups = []
         for group in groups:
             if index < len(group):
                 rows.append(group.iloc[index])
-                if limit is not None and len(rows) >= limit:
-                    break
             if index + 1 < len(group):
                 next_groups.append(group)
         groups = next_groups
@@ -100,6 +93,11 @@ def filter_dataframe(
     random_seed: int = 42,
     exclude_reviewed_root: Path | None = None,
 ) -> pd.DataFrame:
+    """Select a stable batch, then optionally remove already-reviewed items.
+
+    Important: `start/limit` are applied before reviewed-item exclusion so batch ranges do
+    not shift as human reviews accumulate between runs.
+    """
     filtered = df.copy()
 
     if source != "all" and "group" in filtered.columns:
@@ -112,22 +110,19 @@ def filter_dataframe(
             filtered = filtered[filtered["error_type"].fillna("").astype(str).isin(wanted)]
 
     filtered = filtered.reset_index(drop=True)
-    if exclude_reviewed_root is not None:
-        keep_mask = [not reviewed_json_exists(row, exclude_reviewed_root) for _, row in filtered.iterrows()]
-        filtered = filtered[pd.Series(keep_mask, index=filtered.index)].reset_index(drop=True)
+    if selection_mode == "random" and not filtered.empty:
+        filtered = filtered.sample(frac=1.0, random_state=random_seed).reset_index(drop=True)
+    elif selection_mode == "balanced":
+        filtered = _balanced_rows(filtered)
 
     if start:
         filtered = filtered.iloc[start:].reset_index(drop=True)
+    if limit:
+        filtered = filtered.head(limit).reset_index(drop=True)
 
-    if selection_mode == "random":
-        if not filtered.empty:
-            filtered = filtered.sample(frac=1.0, random_state=random_seed).reset_index(drop=True)
-        if limit:
-            filtered = filtered.head(limit)
-    elif selection_mode == "balanced":
-        filtered = _balanced_rows(filtered, limit)
-    elif limit:
-        filtered = filtered.head(limit)
+    if exclude_reviewed_root is not None and not filtered.empty:
+        keep_mask = [not reviewed_json_exists(row, exclude_reviewed_root) for _, row in filtered.iterrows()]
+        filtered = filtered[pd.Series(keep_mask, index=filtered.index)].reset_index(drop=True)
 
     return filtered.reset_index(drop=True)
 
@@ -180,6 +175,19 @@ def _public_frame(df: pd.DataFrame) -> pd.DataFrame:
 
 def _estimated_cost(input_tokens: int, output_tokens: int, input_price_per_million: float, output_price_per_million: float) -> float:
     return (input_tokens / 1_000_000.0) * input_price_per_million + (output_tokens / 1_000_000.0) * output_price_per_million
+
+
+def _totals(df: pd.DataFrame) -> tuple[float, int, int, int]:
+    if df.empty:
+        return 0.0, 0, 0, 0
+    cost = float(pd.to_numeric(df.get("estimated_cost_usd", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
+    input_tokens = int(pd.to_numeric(df.get("input_tokens", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
+    output_tokens = int(pd.to_numeric(df.get("output_tokens", pd.Series(dtype=float)), errors="coerce").fillna(0).sum())
+    if "error" in df.columns:
+        error_count = int(df["error"].fillna("").astype(str).str.strip().ne("").sum())
+    else:
+        error_count = 0
+    return cost, input_tokens, output_tokens, error_count
 
 
 def run(
@@ -239,7 +247,6 @@ def run(
     selected_total = len(df)
     work_rows: list[pd.Series] = []
     already_complete = 0
-    existing_failed = 0
     for _, row in df.iterrows():
         key = row_key(row)
         previous = existing_lookup.get(key)
@@ -249,7 +256,6 @@ def run(
             continue
         previous_error = str(previous.get("error", "") or "").strip()
         if previous_error:
-            existing_failed += 1
             if retry_failed or retry_errors_only:
                 work_rows.append(row)
             else:
@@ -261,19 +267,8 @@ def run(
         raise ValueError("현재 결과 CSV에서 재시도할 실패 항목이 없습니다.")
 
     total_to_run = len(work_rows)
-    cumulative_cost = 0.0
-    cumulative_input_tokens = 0
-    cumulative_output_tokens = 0
-    if not existing.empty:
-        if "estimated_cost_usd" in existing.columns:
-            cumulative_cost = float(pd.to_numeric(existing["estimated_cost_usd"], errors="coerce").fillna(0).sum())
-        if "input_tokens" in existing.columns:
-            cumulative_input_tokens = int(pd.to_numeric(existing["input_tokens"], errors="coerce").fillna(0).sum())
-        if "output_tokens" in existing.columns:
-            cumulative_output_tokens = int(pd.to_numeric(existing["output_tokens"], errors="coerce").fillna(0).sum())
-
+    cumulative_cost, cumulative_input_tokens, cumulative_output_tokens, current_errors = _totals(_public_frame(existing))
     started = time.monotonic()
-    current_errors = existing_failed if retry_errors_only else 0
     stop_reason = ""
 
     def notify(completed_this_run: int, image_id: str = "") -> None:
@@ -305,8 +300,8 @@ def run(
         )
 
     notify(0)
-
     completed_this_run = 0
+
     for row in tqdm(work_rows, total=total_to_run):
         image_path = str(row["image_path"])
         image_id = str(row.get("image_id", Path(image_path).stem))
@@ -353,9 +348,6 @@ def run(
         output_tokens = int(meta.get("output_tokens", 0) or 0)
         total_tokens = int(meta.get("total_tokens", input_tokens + output_tokens) or 0)
         row_cost = _estimated_cost(input_tokens, output_tokens, input_price_per_million, output_price_per_million)
-        cumulative_input_tokens += input_tokens
-        cumulative_output_tokens += output_tokens
-        cumulative_cost += row_cost
 
         result_row["attempt_count"] = attempt
         result_row["input_tokens"] = input_tokens
@@ -365,7 +357,6 @@ def run(
         result_row["response_id"] = str(meta.get("response_id", ""))
 
         if not success:
-            current_errors += 1
             result_row["raw_response"] = ""
             result_row["error"] = last_error
             result_row["llm_change"] = 0
@@ -374,7 +365,9 @@ def run(
             result_row["review_required"] = True
 
         existing = _upsert(existing, result_row)
-        _atomic_write_csv(_public_frame(existing), output_csv)
+        public = _public_frame(existing)
+        _atomic_write_csv(public, output_csv)
+        cumulative_cost, cumulative_input_tokens, cumulative_output_tokens, current_errors = _totals(public)
         completed_this_run += 1
 
         checkpoint = {
