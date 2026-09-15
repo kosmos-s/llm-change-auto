@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Callable
 
 import pandas as pd
 from tqdm import tqdm
@@ -15,6 +16,9 @@ from tqdm import tqdm
 from llm_client import ask_openai_vision, sanitize_error_message
 from parse_llm_result import extract_json, normalize_result
 from prompt_builder import build_prompt, load_prompt
+
+
+ProgressCallback = Callable[[int, int, str, int], None]
 
 
 def filter_dataframe(
@@ -50,6 +54,7 @@ def run(
     start: int = 0,
     limit: int | None = None,
     model: str = "gpt-4o-mini",
+    progress_callback: ProgressCallback | None = None,
 ) -> None:
     df = pd.read_csv(input_csv)
     df = filter_dataframe(df, source=source, split=split, start=start, limit=limit)
@@ -61,9 +66,15 @@ def run(
 
     base_prompt = load_prompt(prompt_path)
     rows = []
+    total = len(df)
+    error_count = 0
 
-    for _, row in tqdm(df.iterrows(), total=len(df)):
+    if progress_callback is not None:
+        progress_callback(0, total, "", 0)
+
+    for completed, (_, row) in enumerate(tqdm(df.iterrows(), total=total), start=1):
         image_path = row["image_path"]
+        image_id = str(row.get("image_id", row.get("image_name", Path(str(image_path)).stem)))
         # 기존 정답 라벨은 OpenAI에 제공하지 않는다. 파일명만 힌트로 전달한다.
         prompt = build_prompt(base_prompt, row.get("image_name"), None)
         result_row = row.to_dict()
@@ -77,6 +88,7 @@ def run(
             result_row["raw_response"] = raw_text
             result_row["error"] = ""
         except Exception as exc:
+            error_count += 1
             result_row["raw_response"] = ""
             result_row["error"] = sanitize_error_message(exc)
             result_row["llm_change"] = 0
@@ -84,6 +96,9 @@ def run(
             result_row["confidence"] = 0.0
             result_row["review_required"] = True
         rows.append(result_row)
+
+        if progress_callback is not None:
+            progress_callback(completed, total, image_id, error_count)
 
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_csv(output_csv, index=False, encoding="utf-8-sig")
