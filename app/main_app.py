@@ -1,7 +1,7 @@
 """Unified Streamlit entrypoint.
 
-검수 UI, OpenAI 자동화 UI, 통계 UI, OpenAI 결과 분석, 검수 이력,
-정제 데이터 내보내기를 하나의 Streamlit 서버에서 함께 사용한다.
+OpenAI 자동판정 → 사람 검수 → 검수 이력 → 정제 데이터 생성 → 작업 통계 → LLM 결과 분석
+순서로 전체 작업 흐름을 안내한다.
 
 Run:
     streamlit run app/main_app.py
@@ -22,16 +22,16 @@ st.caption("항공영상 학습데이터 검수 + OpenAI GPT 자동화 통합 UI
 
 st.markdown(
     """
-## 사용 방법
+## 사용 순서
 
-왼쪽 사이드바의 **Pages**에서 원하는 화면을 선택하세요.
+왼쪽 사이드바의 페이지를 **1 → 6 순서로** 따라가면 됩니다.
 
-- **검수 UI**: `dataset/errors` 이미지를 보고 JSON 라벨을 수정합니다.
-- **OpenAI GPT 자동화 UI**: 데이터 인덱스 생성, GPT 자동판별, 라벨 비교, 검수 대상 CSV 생성을 실행합니다.
-- **통계 UI**: OpenAI 결과 CSV와 reviewed_json 저장 결과를 요약합니다.
-- **OpenAI 결과 분석**: GPT 결과와 현재 JSON 라벨의 일치·불일치 특성을 분석합니다.
-- **검수 이력**: 원본 라벨, OpenAI GPT 결과, 사람이 확정한 라벨을 연결합니다.
-- **정제 데이터 내보내기**: reviewed_json을 우선 적용한 학습용 manifest와 JSON snapshot을 만듭니다.
+1. **OpenAI 자동판정**: 데이터 인덱스 생성, GPT 자동판별, 기존 라벨 비교, 검수 대상 CSV 생성
+2. **사람 검수**: 검수 대상 이미지를 확인하고 최종 라벨을 `reviewed_json`으로 저장
+3. **검수 이력**: 원본 라벨, OpenAI GPT 결과, 사람 확정 라벨을 연결
+4. **정제 데이터 생성**: 사람이 검수한 JSON을 우선 적용해 학습용 manifest와 JSON snapshot 생성
+5. **작업 통계**: OpenAI 결과 CSV와 reviewed_json 저장 현황 확인
+6. **LLM 결과 분석**: GPT와 현재 JSON 라벨의 일치·불일치 특성 분석
 
 모든 화면은 하나의 Streamlit 앱에서 동작하므로 `localhost:8501` 하나만 사용합니다.
 """
@@ -40,36 +40,36 @@ st.markdown(
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.subheader("검수 UI")
-    st.write("이미지를 직접 보면서 라벨과 reason을 수정합니다.")
-    st.page_link("pages/1_검수_UI.py", label="검수 UI 열기", icon="✅")
+    st.subheader("1. OpenAI 자동판정")
+    st.write("데이터 인덱스 생성부터 검수 대상 CSV 생성까지 처리합니다.")
+    st.page_link("pages/1_OpenAI_자동판정.py", label="OpenAI 자동판정 열기", icon="🤖")
 
 with col2:
-    st.subheader("OpenAI GPT 자동화 UI")
-    st.write("GPT 실행부터 검수 대상 CSV 생성까지 버튼으로 처리합니다.")
-    st.page_link("pages/2_LLM_자동화_UI.py", label="OpenAI GPT 자동화 UI 열기", icon="🤖")
+    st.subheader("2. 사람 검수")
+    st.write("검수 대상 이미지를 직접 보고 최종 라벨을 확정합니다.")
+    st.page_link("pages/2_사람_검수.py", label="사람 검수 열기", icon="✅")
 
 with col3:
-    st.subheader("통계 UI")
-    st.write("OpenAI CSV 결과와 reviewed_json 저장 현황을 요약합니다.")
-    st.page_link("pages/3_통계_UI.py", label="통계 UI 열기", icon="📊")
+    st.subheader("3. 검수 이력")
+    st.write("원본·OpenAI GPT·사람 최종 라벨과 수정 항목을 연결합니다.")
+    st.page_link("pages/3_검수_이력.py", label="검수 이력 열기", icon="📝")
 
 col4, col5, col6 = st.columns(3)
 
 with col4:
-    st.subheader("OpenAI 결과 분석")
-    st.write("GPT 결과를 현재 JSON 라벨과 비교하되 최종 모델 F2와 분리해 봅니다.")
-    st.page_link("pages/4_LLM_결과_분석.py", label="OpenAI 결과 분석 열기", icon="🔎")
+    st.subheader("4. 정제 데이터 생성")
+    st.write("사람 검수본을 우선 적용한 clean dataset manifest를 만듭니다.")
+    st.page_link("pages/4_정제_데이터_생성.py", label="정제 데이터 생성", icon="📦")
 
 with col5:
-    st.subheader("검수 이력")
-    st.write("원본·OpenAI GPT·사람 최종 라벨과 수정 항목을 CSV로 정리합니다.")
-    st.page_link("pages/5_검수_이력.py", label="검수 이력 열기", icon="📝")
+    st.subheader("5. 작업 통계")
+    st.write("OpenAI CSV 결과와 reviewed_json 저장 현황을 요약합니다.")
+    st.page_link("pages/5_작업_통계.py", label="작업 통계 열기", icon="📊")
 
 with col6:
-    st.subheader("정제 데이터 내보내기")
-    st.write("사람 검수본을 우선 적용한 clean dataset manifest를 만듭니다.")
-    st.page_link("pages/6_정제_데이터_내보내기.py", label="정제 데이터 내보내기", icon="📦")
+    st.subheader("6. LLM 결과 분석")
+    st.write("GPT 결과를 현재 JSON 라벨과 비교하되 최종 모델 F2와 분리해 봅니다.")
+    st.page_link("pages/6_LLM_결과_분석.py", label="LLM 결과 분석 열기", icon="🔎")
 
 st.divider()
 st.info("VS Code에서는 `app/run_app.py`를 열고 Ctrl + F5를 누르면 이 통합 UI가 실행됩니다.")
