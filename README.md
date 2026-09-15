@@ -2,14 +2,15 @@
 
 우송대학교 산학협력 과제용 **항공영상 변화탐지 학습데이터 검수 + OpenAI GPT 자동화 통합 도구**입니다.
 
-프로젝트의 역할은 GPT가 최종 변화탐지 모델을 대신하는 것이 아니라, 학습데이터의 오류 후보를 찾고 사람이 빠르게 검수할 수 있도록 돕는 것입니다.
+GPT가 최종 변화탐지 모델을 대신하는 것이 아니라, 기존 학습데이터와 비교해 오류 후보를 찾고 사람이 빠르게 검수한 뒤 정제 데이터를 재학습에 사용할 수 있도록 만드는 도구입니다.
 
 ```text
-GPT 자동판별
+OpenAI GPT 자동판정
 → 기존 JSON 라벨과 비교
-→ 검수 대상 추출
-→ 사람이 최종 라벨 확정
-→ 검수 이력 및 정제 데이터 축적
+→ 우선순위 검수 대상 추출
+→ 사람 최종 검수
+→ reviewed_json / 이벤트 이력 축적
+→ 버전별 정제 데이터 Snapshot
 → 변화탐지 모델 재학습·평가
 ```
 
@@ -17,18 +18,85 @@ GPT 자동판별
 
 ---
 
-## 1. 주요 기능
+## 1. 현재 주요 기능
 
-- `*_combined.jpg`, `*_left.jpg`, `*_right.jpg`, `*_combined.json` 구조 읽기
-- `dataset` 일반 데이터와 `errors` 오탐·미탐 데이터 구분
-- 기존 JSON 라벨 확인 및 수정
-- OpenAI GPT 기반 변화유무·세부 라벨 자동판단
-- 기존 JSON 라벨과 GPT 결과 비교
-- 검수 대상 CSV 생성
-- 검수 대상만 검수 UI에서 순서대로 확인
-- 사람 확정 라벨을 `reviewed_json`으로 별도 저장
-- 원본·GPT·사람 라벨을 `review_history.csv`로 연결
-- LLM 결과 분석과 최종 변화탐지 모델 F2 평가를 분리
+### OpenAI 자동판정
+
+- `dataset / errors`, `train / val / test` 구분
+- `*_combined.jpg`, `*_left.jpg`, `*_right.jpg`, `*_combined.json` 매칭
+- OpenAI Structured Output 기반 변화유무·세부라벨 판정
+- 처리 진행률, 현재 image_id, 성공/오류 수, 경과시간, ETA 표시
+- **이미지 1건 처리할 때마다 결과 CSV 즉시 저장**
+- 중단 후 같은 결과 파일로 **Resume**
+- 성공한 항목 자동 Skip
+- 실패 항목만 재시도
+- API 오류 자동 Retry + exponential backoff
+- run_id / batch_id / 처리시각 / 모델 / prompt 경로 기록
+- checkpoint JSON 자동 저장
+- 입력·출력 token 사용량 기록
+- 사용자가 입력한 현재 API 단가 기준 비용 추정 및 비용 상한
+- 순차 / 랜덤 / 오류유형 균형 선택
+- 이미 사람 검수한 항목 자동 제외 옵션
+- 테스트/본작업 파일 prefix 분리
+
+### 검수 대상 선정
+
+- 기존 JSON ↔ GPT 변화유무 비교
+- 세부라벨 불일치 비교
+- Low confidence
+- API 오류
+- GPT 자체 review_required
+- 변화인데 세부 class가 비어 있는 경우
+- 위 조건을 조합한 `priority_score` 생성
+- API 오류 / 라벨 불일치 / 낮은 confidence 순으로 우선 검수
+
+### 사람 검수
+
+- LLM 검수 대상 CSV 로드
+- 미검수만 보기
+- 보류 항목 제외
+- 라벨 불일치 / Low confidence / API 오류 필터
+- errors 유형 / GPT class 필터
+- 검수 목록 진행률
+- 원본 ↔ GPT 비교표
+- 기존 reviewed_json이 있으면 그 값을 다시 불러오기
+- `저장`, `저장 + 다음`, `보류 + 다음`
+- reviewed_json 재저장 전 이전 버전 자동 백업
+- 검수 메모 저장
+
+### 검수 이력
+
+- `review_history.csv`: 원본·GPT·사람 최종 라벨 연결
+- `review_events.csv`: 저장/보류 이벤트 append-only 기록
+- 수정 전·후 상태와 변경된 key 기록
+- batch / run / 모델 / prompt 메타데이터 연결
+
+### 데이터 품질 / Export
+
+- missing combined / left / right / JSON 검사
+- 잘못된 JSON 검사
+- 중복 key 검사
+- 동일 image_id의 split 누수 검사
+- Artifact와 세부 인공물 라벨 논리 검사
+- 고아 파일 세트 검사
+- Export 전 품질검사
+- 무결성 error가 있으면 Export 차단 옵션
+- `clean_v1`, `clean_v2`, `final` 같은 버전별 Snapshot
+- reviewed_json 우선, 미검수는 원본 JSON 사용
+- source / split / label_source 통계 자동 생성
+
+### 작업 통계
+
+- 3,000건 목표 진행률
+- OpenAI 고유 처리 건수
+- 사람 검수 완료 / 남은 수량
+- train / val / test별 검수 수
+- errors 유형별 검수 완료 수
+- 원본 라벨 수정률
+- 오류유형별 수정률
+- 클래스별 수정률
+- confidence 구간별 GPT-사람 일치율
+- 검수 대상 선정 이유 통계
 
 ---
 
@@ -50,7 +118,7 @@ GPT 자동판별
 └─ llm-change-auto/
 ```
 
-각 데이터 폴더 안에는 보통 아래 파일이 있습니다.
+샘플 1건의 기본 구조:
 
 ```text
 00_xxxx_combined.jpg
@@ -59,288 +127,222 @@ GPT 자동판별
 00_xxxx_right.jpg
 ```
 
-`errors` 폴더에는 오류 유형별 하위 폴더가 있을 수 있습니다.
+`errors`에는 다음처럼 오류유형 폴더가 추가될 수 있습니다.
 
 ```text
-errors/test/artifact_fn_00/
-errors/test/artifact_fp_00/
+errors/train/artifact_fn_00/
+errors/train/artifact_fp_00/
+errors/train/farmland_fp_00/
 ```
 
 ---
 
-## 3. API Key 보안 원칙
+## 3. 설치 / 실행
 
-- 실제 API 키는 프로젝트 루트의 로컬 `.env`에만 저장합니다.
-- API 키를 Streamlit 화면, Python 코드, CSV, JSON, 로그에 넣지 않습니다.
-- `.env`와 `.env.*`는 `.gitignore`에서 제외됩니다.
-- `.env.example`에는 예시 값만 둡니다.
-- OpenAI SDK가 `OPENAI_API_KEY` 환경변수를 직접 읽습니다.
-- 오류 메시지에 키 형태 문자열이 포함되면 `[REDACTED_API_KEY]`로 가립니다.
-- 원본 이미지와 실행 결과 CSV는 GitHub에 업로드하지 않습니다.
+```powershell
+cd "C:\Users\rlarj\Desktop\산학과제\llm-change-auto"
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python -m streamlit run app\main_app.py
+```
 
-`.env` 예시:
+브라우저:
+
+```text
+http://localhost:8501
+```
+
+GitHub 최신 버전을 받을 때:
+
+```powershell
+git pull
+```
+
+---
+
+## 4. API Key
+
+실제 API 키는 프로젝트 루트의 로컬 `.env`에만 저장합니다.
 
 ```text
 OPENAI_API_KEY=your_openai_api_key_here
 OPENAI_TIMEOUT=60
 ```
 
----
+선택적으로 비용 계산 기본 단가를 환경변수로 둘 수 있습니다.
 
-## 4. 설치
-
-```powershell
-cd "C:\Users\rlarj\Desktop\산학과제\llm-change-auto"
-py -m venv .venv
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+```text
+OPENAI_INPUT_PRICE_PER_1M=0
+OPENAI_OUTPUT_PRICE_PER_1M=0
 ```
 
-이미 가상환경이 있으면:
+모델 가격은 변경될 수 있으므로 **현재 OpenAI 가격을 확인한 뒤 UI에서 직접 입력**하는 것을 권장합니다.
 
-```powershell
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
+`.env`, 이미지, 실행 결과 CSV/JSON은 `.gitignore` 대상입니다.
 
 ---
 
-## 5. 통합 UI 실행
-
-VS Code에서:
+## 5. 화면 사용 순서
 
 ```text
-app/run_app.py 열기 → Ctrl + F5
+1. OpenAI 자동판정
+2. 사람 검수
+3. 검수 이력
+4. 정제 데이터 생성
+5. 작업 통계
+6. LLM 결과 분석
 ```
 
-터미널에서:
+### 1. OpenAI 자동판정
 
-```powershell
-python -m streamlit run app\main_app.py
-```
-
-브라우저 주소:
+본작업 예시:
 
 ```text
-http://localhost:8501
+작업 모드 : 본작업
+데이터 종류 : errors
+분할 : train
+시작 번호 : 0
+개수 : 500
+선택 방식 : 순차 또는 오류유형 균형
+이미 사람 검수한 항목 제외 : ON
+중단된 결과 이어서 처리 : ON
+기존 실패 항목 자동 재시도 : ON
+항목당 최대 API 시도 : 3
+프롬프트 : prompt_v4_quality.txt
 ```
 
-통합 UI 페이지:
-
-| 페이지 | 역할 |
-|---|---|
-| `검수 UI` | 이미지 확인, JSON 라벨 수정, GPT 검수 대상 확인 |
-| `LLM 자동화 UI` | 데이터 인덱스 생성, GPT 실행, 비교, 검수 목록 생성 |
-| `통계 UI` | CSV 결과와 reviewed_json 저장 현황 요약 |
-| `LLM 결과 분석` | GPT와 현재 JSON 라벨의 일치·불일치 특성 분석 |
-| `검수 이력` | 원본·GPT·사람 확정 라벨을 하나의 CSV로 연결 |
-
----
-
-## 6. OpenAI 자동화 순서
-
-첫 테스트 권장 설정:
-
-```text
-데이터 종류: dataset
-분할: test
-시작 번호: 0
-개수: 1
-OpenAI 모델: gpt-4o-mini
-프롬프트: prompts/prompt_v4_quality.txt
-출력 파일 접두어: openai_dataset_test_1
-```
-
-버튼 실행 순서:
+작업 순서:
 
 ```text
 dataset_index.csv 생성
-→ OpenAI 실행
+→ 데이터 무결성 검사
+→ OpenAI 실행 / 이어서 처리
 → 비교 실행
 → 검수 목록 생성
 ```
 
-생성 파일:
+같은 Batch가 중간에 끊기면 **동일한 출력 접두어를 유지한 상태에서 다시 `OpenAI 실행 / 이어서 처리`**를 누릅니다.
+
+새 버전은 성공한 행을 다시 호출하지 않고 미처리/실패 항목만 이어서 처리합니다.
+
+### 2. 사람 검수
+
+`LLM 검수 대상 CSV` 모드에서 방금 생성한 `outputs/review_lists/*_review.csv`를 불러옵니다.
+
+본작업에서는 저장 위치를 다음으로 유지합니다.
 
 ```text
-outputs/dataset_index.csv
-outputs/llm_results/openai_dataset_test_1.csv
-outputs/compare_results/openai_dataset_test_1_compare.csv
-outputs/review_lists/openai_dataset_test_1_review.csv
+reviewed_json 폴더에 저장
 ```
 
-1장이 정상 처리되고 `error` 컬럼이 비어 있는 것을 확인한 뒤 `3장 → 10장 → 50장` 순서로 늘립니다.
+원본 JSON 덮어쓰기는 권장하지 않습니다.
 
----
-
-## 7. 검수 UI 사용
-
-검수 모드:
-
-```text
-폴더 전체 검수
-LLM 검수 대상 CSV
-```
-
-검수 대상 CSV 예시:
-
-```text
-outputs/review_lists/openai_dataset_test_1_review.csv
-```
-
-검수 화면에서 확인할 정보:
-
-- 현재 JSON 라벨
-- GPT 라벨
-- confidence
-- 변화유무 불일치
-- 세부 라벨 불일치
-- 검수 대상 선정 이유
-- GPT 판단 근거
-
-저장 방식:
-
-| 저장 방식 | 설명 |
-|---|---|
-| `reviewed_json 폴더에 저장` | 원본 JSON을 유지하고 사람 확정본을 별도 저장 |
-| `원본 JSON 덮어쓰기` | 기존 JSON을 직접 수정 |
-
-처음에는 반드시 `reviewed_json 폴더에 저장`을 사용합니다.
-
----
-
-## 8. LLM 결과 분석
-
-`LLM 결과 분석` 페이지는 GPT 보조도구의 특성을 확인하기 위한 화면입니다.
-
-표시 항목:
-
-- 변화유무 정확도
-- Precision
-- Recall
-- F1
-- GPT 비교용 F2
-- TP / TN / FP / FN
-- 세부 라벨 평균 일치율
-- 세부 라벨 완전 일치율
-
-주의:
-
-```text
-여기서 표시되는 F2
-= GPT 결과와 현재 JSON 라벨을 비교한 값
-
-산학과제 최종 F2 0.85
-= 정제 데이터로 재학습한 변화탐지 모델의 평가값
-```
-
-두 값을 같은 성능으로 해석하면 안 됩니다.
-
----
-
-## 9. 검수 이력
-
-검수 UI에서 `reviewed_json`으로 저장한 뒤 `검수 이력` 페이지에서 다음 버튼을 누릅니다.
+### 3. 검수 이력
 
 ```text
 검수 이력 갱신
 ```
 
-생성 파일:
+주요 결과:
 
 ```text
 outputs/review_history/review_history.csv
+outputs/review_events/review_events.csv
+outputs/backups/reviewed_json/
 ```
 
-주요 컬럼:
+### 4. 정제 데이터 생성
+
+먼저 `Export 전 품질검사`를 실행합니다.
+
+그다음 버전 이름을 지정합니다.
 
 ```text
-image_id
-source
-split
-original_change
-llm_change
-human_change
-original_* 라벨
-llm_* 라벨
-human_* 라벨
-labels_modified
-modified_keys
-review_status
-reviewed_at
+clean_v1
+clean_v2
+final
 ```
 
-현재 버전은 각 `reviewed_json` 파일의 최신 저장 상태를 기준으로 이력을 만듭니다. 같은 파일의 저장 시점별 이벤트 로그는 후속 단계에서 추가합니다.
-
----
-
-## 10. 현재 프로젝트 구조
+Snapshot 결과 예시:
 
 ```text
-llm-change-auto/
-├─ app/
-│  ├─ main_app.py
-│  ├─ run_app.py
-│  ├─ reviewer_app.py
-│  ├─ llm_pipeline_app.py
-│  └─ pages/
-│     ├─ 1_검수_UI.py
-│     ├─ 2_LLM_자동화_UI.py
-│     ├─ 3_통계_UI.py
-│     ├─ 4_LLM_결과_분석.py
-│     └─ 5_검수_이력.py
-│
-├─ src/
-│  ├─ dataset_loader.py
-│  ├─ json_io.py
-│  ├─ scan_dataset.py
-│  ├─ llm_client.py
-│  ├─ run_llm_labeling.py
-│  ├─ compare_labels.py
-│  ├─ make_review_list.py
-│  ├─ evaluate_results.py
-│  ├─ build_review_history.py
-│  └─ ...
-│
-├─ prompts/
-│  ├─ prompt_v1_basic.txt
-│  ├─ prompt_v2_guideline.txt
-│  ├─ prompt_v3_json_strict.txt
-│  └─ prompt_v4_quality.txt
-│
-├─ outputs/
-│  ├─ llm_results/
-│  ├─ compare_results/
-│  ├─ review_lists/
-│  ├─ reviewed_json/
-│  └─ review_history/
-├─ config/
-├─ docs/
-├─ tests/
-├─ .env.example
-├─ .gitignore
-├─ requirements.txt
-└─ README.md
+outputs/clean_datasets/clean_v1/
+├─ clean_dataset_manifest.csv
+├─ quality_report.csv
+├─ snapshot_summary.json
+└─ json/
 ```
 
 ---
 
-## 11. 현재 구현 상태
+## 6. 주요 outputs
+
+```text
+outputs/
+├─ dataset_index.csv
+├─ llm_results/
+│  ├─ *.csv
+│  └─ *.checkpoint.json
+├─ compare_results/
+├─ review_lists/
+├─ reviewed_json/
+├─ review_events/
+│  └─ review_events.csv
+├─ review_history/
+│  └─ review_history.csv
+├─ backups/
+│  └─ reviewed_json/
+├─ quality/
+│  └─ dataset_quality.csv
+└─ clean_datasets/
+   ├─ clean_v1/
+   ├─ clean_v2/
+   └─ final/
+```
+
+본작업이 시작된 뒤의 `llm_results`, `review_lists`, `reviewed_json`, `review_events`, `review_history`는 임의 삭제하지 않는 것을 권장합니다.
+
+---
+
+## 7. 현재 구현 상태
 
 - [x] 통합 Streamlit UI
-- [x] 검수 UI
-- [x] OpenAI GPT 자동화 UI
-- [x] 통계 UI
+- [x] OpenAI 자동판정
+- [x] 실시간 진행률 / ETA / 처리속도
+- [x] 매 이미지 즉시 저장
+- [x] 중단 후 Resume / 성공 항목 Skip
+- [x] 실패 항목 재시도 / exponential backoff
+- [x] checkpoint
+- [x] token 사용량 / 설정 단가 기반 비용 추적
+- [x] Batch / Run 메타데이터
+- [x] 균형/랜덤/순차 대상 선택
+- [x] 우선순위 검수 목록
+- [x] 사람 검수 필터 및 진행률
+- [x] 검수 저장 이벤트 이력
+- [x] reviewed_json 자동 백업
+- [x] 데이터 무결성 검사
+- [x] 버전별 정제 데이터 Snapshot
+- [x] 3,000건 작업 진행 통계
 - [x] LLM 결과 분석
-- [x] 검수 이력 CSV 생성
-- [x] dataset/errors 및 train/val/test 구분
-- [x] combined/left/right 이미지 표시
-- [x] JSON 라벨 수정 및 별도 저장
-- [x] OpenAI Structured Output 결과 저장
-- [x] 기존 라벨과 GPT 결과 비교
-- [x] 검수 대상 CSV 생성
-- [x] API 키 오류 메시지 마스킹
-- [ ] 저장 버튼을 누를 때마다 이벤트 단위 검수 이력 자동 추가
-- [ ] 정제 학습데이터 내보내기
-- [ ] 엘컴텍 변화탐지 모델 재학습 전·후 F2 비교
+- [ ] 엘컴텍 변화탐지 모델 재학습 전·후 F2 비교 화면
+
+---
+
+## 8. 중요 원칙
+
+```text
+GPT 결과 ≠ 최종 정답
+```
+
+GPT와 기존 JSON이 다르다는 이유만으로 기존 라벨을 자동 수정하지 않습니다.
+
+```text
+GPT 자동판정
+→ 오류 후보 선정
+→ 사람 검수
+→ reviewed_json 확정
+```
+
+의 순서를 유지합니다.
+
+또한 `LLM 결과 분석`에서 표시되는 F2는 **GPT와 현재 JSON의 비교 지표**이고, 산학과제 최종 목표 F2 0.85는 **정제 데이터로 재학습한 변화탐지 모델의 성능**입니다.
