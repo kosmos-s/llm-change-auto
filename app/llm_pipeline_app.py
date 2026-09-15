@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -253,6 +254,32 @@ def main() -> None:
             elif not prompt_path.exists():
                 st.error(f"프롬프트 파일이 없습니다: {prompt_path}")
             else:
+                started_at = time.monotonic()
+                progress_bar = st.progress(0.0, text="OpenAI 자동판별 준비 중...")
+                status = st.empty()
+                m1, m2, m3, m4 = st.columns(4)
+                processed_box = m1.empty()
+                error_box = m2.empty()
+                elapsed_box = m3.empty()
+                eta_box = m4.empty()
+
+                def on_progress(done: int, total: int, image_id: str, error_count: int) -> None:
+                    elapsed = max(0.0, time.monotonic() - started_at)
+                    ratio = (done / total) if total else 0.0
+                    avg_seconds = elapsed / done if done else 0.0
+                    eta_seconds = avg_seconds * max(total - done, 0)
+
+                    progress_bar.progress(
+                        min(max(ratio, 0.0), 1.0),
+                        text=f"처리 진행도: {done:,} / {total:,} ({ratio:.1%})",
+                    )
+                    processed_box.metric("처리 완료", f"{done:,} / {total:,}")
+                    error_box.metric("API 오류", f"{error_count:,}")
+                    elapsed_box.metric("경과 시간", f"{elapsed / 60:.1f}분")
+                    eta_box.metric("예상 남은 시간", "-" if done == 0 else f"{eta_seconds / 60:.1f}분")
+                    if image_id:
+                        status.caption(f"현재 처리 중/완료 샘플: {image_id}")
+
                 with st.spinner(
                     f"OpenAI 자동판별 실행 중... {settings['limit']}장을 처리합니다."
                 ):
@@ -265,7 +292,10 @@ def main() -> None:
                         start=int(settings["start"]),
                         limit=int(settings["limit"]),
                         model=str(settings["model"]),
+                        progress_callback=on_progress,
                     )
+                progress_bar.progress(1.0, text="OpenAI 자동판별 완료")
+                status.success(f"처리 완료: {llm_path}")
                 st.success(f"OpenAI 결과 생성 완료: {llm_path}")
     with c2:
         st.code(
