@@ -1,4 +1,4 @@
-"""Turn data-quality findings into a safe remediation plan without mutating raw data."""
+"""Turn data-quality findings into safe remediation plans without mutating raw data."""
 
 from __future__ import annotations
 
@@ -47,3 +47,38 @@ def build_quality_action_plan(report: pd.DataFrame) -> pd.DataFrame:
     order = {"blocking": 0, "review": 1, "info": 2}
     result["_order"] = result["priority"].map(order).fillna(9)
     return result.sort_values(["_order", "code", "image_id"]).drop(columns=["_order"]).reset_index(drop=True)
+
+
+def build_split_leakage_details(index_df: pd.DataFrame, report: pd.DataFrame) -> pd.DataFrame:
+    """Expand split-leakage findings to every matching indexed sample path."""
+    if index_df is None or index_df.empty or report is None or report.empty:
+        return pd.DataFrame()
+    if "code" not in report.columns or "image_id" not in report.columns:
+        return pd.DataFrame()
+
+    leakage = report[report["code"].astype(str) == "split_leakage"].copy()
+    if leakage.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for _, issue in leakage.iterrows():
+        image_id = str(issue.get("image_id", "")).strip()
+        group = str(issue.get("group", "")).strip()
+        matches = index_df[index_df["image_id"].astype(str) == image_id].copy()
+        if group and "group" in matches.columns:
+            matches = matches[matches["group"].astype(str) == group]
+        for _, sample in matches.iterrows():
+            rows.append(
+                {
+                    "image_id": image_id,
+                    "group": str(sample.get("group", "")),
+                    "split": str(sample.get("split", "")),
+                    "relative_folder": str(sample.get("relative_folder", ".")),
+                    "image_path": str(sample.get("image_path", "")),
+                    "json_path": str(sample.get("json_path", "")),
+                    "recommendation": "동일 image_id를 어느 split에 유지할지 확정한 뒤 원본 분할을 정리하고 dataset_index를 재생성",
+                }
+            )
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values(["image_id", "group", "split"]).reset_index(drop=True)
