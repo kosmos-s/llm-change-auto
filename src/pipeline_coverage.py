@@ -78,18 +78,22 @@ def _latest_rows(rows: pd.DataFrame, plan_keys: set[str]) -> pd.DataFrame:
 
 
 def _signature_series(rows: pd.DataFrame) -> pd.Series:
+    """Build an execution signature, returning blank when every component is blank."""
     if rows.empty:
         return pd.Series(dtype=str)
-    parts = []
+    parts: list[pd.Series] = []
+    has_value = pd.Series(False, index=rows.index, dtype=bool)
     for column in SIGNATURE_COLUMNS:
         if column in rows.columns:
-            parts.append(rows[column].fillna("").astype(str).str.strip())
+            part = rows[column].fillna("").astype(str).str.strip()
         else:
-            parts.append(pd.Series("", index=rows.index, dtype=str))
+            part = pd.Series("", index=rows.index, dtype=str)
+        parts.append(part)
+        has_value = has_value | part.ne("")
     signature = parts[0]
     for part in parts[1:]:
         signature = signature + "|" + part
-    return signature
+    return signature.where(has_value, "")
 
 
 def _latest_openai_rows(outputs_dir: Path, plan_keys: set[str]) -> pd.DataFrame:
@@ -132,13 +136,51 @@ def current_required_review_rows(outputs_dir: Path, work_plan_path: Path) -> pd.
     return fresh_compare[required].copy().reset_index(drop=True)
 
 
+def _fresh_review_list_keys(
+    outputs_dir: Path,
+    work_plan_path: Path,
+    required_rows: pd.DataFrame,
+) -> tuple[set[str], int]:
+    """Return required keys represented by a review list from the same OpenAI execution."""
+    if required_rows.empty:
+        return set(), 0
+
+    plan_keys = _plan_keys(work_plan_path)
+    review_rows = _latest_rows(
+        _rows_from_csv_dir(outputs_dir / "review_lists", "*_review.csv"),
+        plan_keys,
+    )
+    if review_rows.empty:
+        return set(), 0
+
+    required = required_rows.copy()
+    review = review_rows.copy()
+    required["_execution_signature"] = _signature_series(required)
+    review["_execution_signature"] = _signature_series(review)
+    expected = required.set_index("_logical_key")["_execution_signature"].to_dict()
+    required_keys = set(expected)
+
+    relevant = review[review["_logical_key"].astype(str).isin(required_keys)].copy()
+    if relevant.empty:
+        return set(), 0
+
+    fresh_mask = relevant.apply(
+        lambda row: bool(expected.get(str(row["_logical_key"]), ""))
+        and str(row["_execution_signature"]) == str(expected.get(str(row["_logical_key"]), "")),
+        axis=1,
+    )
+    fresh_keys = set(relevant.loc[fresh_mask, "_logical_key"].astype(str))
+    stale_count = int((~fresh_mask).sum())
+    return fresh_keys, stale_count
+
+
 def pipeline_coverage(outputs_dir: Path, work_plan_path: Path) -> dict[str, int | bool]:
     """Return production coverage using only fresh outputs for the frozen work plan.
 
     A compare row is considered fresh only when its execution signature matches the
     latest OpenAI row for the same logical sample. Current review-required samples must
-    also be present in a production review-list CSV, preventing Final from becoming
-    READY when the user forgot to regenerate the review list.
+    also be present in a production review-list CSV created from that same execution,
+    preventing stale review lists from satisfying the Final Gate after an OpenAI retry.
     """
     plan_keys = _plan_keys(work_plan_path)
     target = len(plan_keys)
@@ -156,13 +198,10 @@ def pipeline_coverage(outputs_dir: Path, work_plan_path: Path) -> dict[str, int 
     required_keys = set(required_rows.get("_logical_key", pd.Series(dtype=str)).astype(str))
     review_required_count = len(required_keys)
 
-    review_rows = _latest_rows(
-        _rows_from_csv_dir(outputs_dir / "review_lists", "*_review.csv"),
-        plan_keys,
+    fresh_review_keys, stale_review_list_count = _fresh_review_list_keys(
+        outputs_dir, work_plan_path, required_rows
     )
-    review_list_keys = set(review_rows.get("_logical_key", pd.Series(dtype=str)).astype(str))
-    listed_required = required_keys & review_list_keys
-    review_list_count = len(listed_required)
+    review_list_count = len(required_keys & fresh_review_keys)
     review_list_missing = max(review_required_count - review_list_count, 0)
 
     return {
@@ -172,6 +211,7 @@ def pipeline_coverage(outputs_dir: Path, work_plan_path: Path) -> dict[str, int 
         "review_decision_count": review_decision_count,
         "review_required_count": review_required_count,
         "review_list_count": review_list_count,
+        "stale_review_list_count": stale_review_list_count,
         "review_list_missing": review_list_missing,
         "compare_missing": max(target - compare_count, 0),
         "review_decision_missing": max(target - review_decision_count, 0),
