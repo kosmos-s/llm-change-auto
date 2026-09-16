@@ -67,6 +67,10 @@ def unique_openai_results(results_dir: Path) -> pd.DataFrame:
 
     Explicit `work_mode=test` rows are excluded so test runs never inflate the
     3,000-item production progress. Legacy rows without work_mode are retained.
+
+    When the same logical sample exists in multiple CSVs, `processed_at` is the
+    authoritative ordering signal. File modification time is only a fallback/tie-breaker,
+    so copying or touching an older CSV cannot make an older inference look newer.
     """
     if not results_dir.exists():
         return pd.DataFrame()
@@ -101,12 +105,14 @@ def unique_openai_results(results_dir: Path) -> pd.DataFrame:
     if merged.empty:
         return merged.reset_index(drop=True)
 
-    sort_columns = ["_mtime"]
+    sort_columns: list[str] = []
     if "processed_at" in merged.columns:
         merged["_processed_order"] = pd.to_datetime(merged["processed_at"], errors="coerce")
         sort_columns.append("_processed_order")
-    merged = merged.sort_values(sort_columns, na_position="first")
+    sort_columns.append("_mtime")
+    merged["_row_order"] = range(len(merged))
+    sort_columns.append("_row_order")
+    merged = merged.sort_values(sort_columns, na_position="first", kind="stable")
     merged = merged.drop_duplicates(KEY_COLUMNS, keep="last")
-    if "_processed_order" in merged.columns:
-        merged = merged.drop(columns=["_processed_order"])
+    merged = merged.drop(columns=["_processed_order", "_row_order"], errors="ignore")
     return merged.reset_index(drop=True)
