@@ -51,6 +51,7 @@ class PipelineCoverageTests(unittest.TestCase):
             self.assertEqual(summary["review_required_count"], 1)
             self.assertEqual(summary["review_list_count"], 1)
             self.assertEqual(summary["review_list_missing"], 0)
+            self.assertEqual(summary["stale_review_list_count"], 0)
             self.assertTrue(summary["ready"])
 
     def test_stale_compare_after_openai_retry_does_not_count(self):
@@ -65,6 +66,49 @@ class PipelineCoverageTests(unittest.TestCase):
             self._write_openai(outputs, [latest])
             stale = dict(row, work_mode="production", run_id="first", processed_at="2026-01-01T00:00:01", response_id="old", review_required_final=False)
             pd.DataFrame([stale]).to_csv(outputs / "compare_results" / "b_compare.csv", index=False)
+            summary = pipeline_coverage(outputs, plan)
+            self.assertEqual(summary["compare_count"], 0)
+            self.assertEqual(summary["stale_compare_count"], 1)
+            self.assertFalse(summary["ready"])
+
+    def test_stale_review_list_after_openai_retry_does_not_count(self):
+        with tempfile.TemporaryDirectory() as temp:
+            outputs = Path(temp)
+            (outputs / "compare_results").mkdir(parents=True)
+            (outputs / "review_lists").mkdir(parents=True)
+            plan = outputs / "work_plan_3000.csv"
+            row = {"group": "errors", "split": "train", "relative_folder": "a", "image_id": "x1"}
+            pd.DataFrame([row]).to_csv(plan, index=False)
+
+            current = dict(row, llm_provider="openai", work_mode="production", run_id="retry", processed_at="2026-01-01T00:00:02", response_id="new", error="")
+            self._write_openai(outputs, [current])
+            current_compare = dict(current, review_required_final=True)
+            pd.DataFrame([current_compare]).to_csv(outputs / "compare_results" / "current_compare.csv", index=False)
+
+            stale_review = dict(row, work_mode="production", run_id="first", processed_at="2026-01-01T00:00:01", response_id="old", review_required_final=True)
+            pd.DataFrame([stale_review]).to_csv(outputs / "review_lists" / "old_review.csv", index=False)
+
+            summary = pipeline_coverage(outputs, plan)
+            self.assertEqual(summary["compare_count"], 1)
+            self.assertEqual(summary["review_required_count"], 1)
+            self.assertEqual(summary["review_list_count"], 0)
+            self.assertEqual(summary["review_list_missing"], 1)
+            self.assertEqual(summary["stale_review_list_count"], 1)
+            self.assertFalse(summary["ready"])
+
+    def test_blank_execution_signatures_do_not_count_as_fresh(self):
+        with tempfile.TemporaryDirectory() as temp:
+            outputs = Path(temp)
+            (outputs / "compare_results").mkdir(parents=True)
+            (outputs / "review_lists").mkdir(parents=True)
+            plan = outputs / "work_plan_3000.csv"
+            row = {"group": "errors", "split": "train", "relative_folder": "a", "image_id": "x1"}
+            pd.DataFrame([row]).to_csv(plan, index=False)
+            legacy = dict(row, llm_provider="openai", work_mode="production", error="")
+            self._write_openai(outputs, [legacy])
+            pd.DataFrame([dict(legacy, review_required_final=False)]).to_csv(
+                outputs / "compare_results" / "legacy_compare.csv", index=False
+            )
             summary = pipeline_coverage(outputs, plan)
             self.assertEqual(summary["compare_count"], 0)
             self.assertEqual(summary["stale_compare_count"], 1)
