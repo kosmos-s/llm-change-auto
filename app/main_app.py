@@ -9,7 +9,14 @@ Run:
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import streamlit as st
+from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(PROJECT_ROOT / ".env")
 
 st.set_page_config(
     page_title="LLM Change Auto",
@@ -19,6 +26,36 @@ st.set_page_config(
 
 st.title("LLM Change Auto")
 st.caption("항공영상 학습데이터 검수 + OpenAI GPT 자동화 통합 UI")
+
+expected_dataset = Path.home() / "Desktop" / "산학과제" / "dataset_sample"
+api_key = str(os.getenv("OPENAI_API_KEY", "")).strip()
+api_ready = bool(api_key and api_key != "your_openai_api_key_here")
+dataset_ready = expected_dataset.exists()
+
+st.markdown("## 실행 환경 확인")
+c1, c2, c3 = st.columns(3)
+c1.metric("Python 환경", "실행됨")
+c2.metric("OpenAI API Key", "확인됨" if api_ready else "설정 필요")
+c3.metric("기본 데이터 경로", "확인됨" if dataset_ready else "확인 필요")
+
+if not api_ready or not dataset_ready:
+    st.warning(
+        "처음 실행한 PC라면 저장소 루트의 `setup.bat`을 먼저 실행하세요. "
+        "`.env`에 API Key를 넣고, dataset_sample이 다른 위치에 있으면 setup.bat에서 연결하거나 "
+        "1. OpenAI 자동판정 화면에서 경로를 직접 지정할 수 있습니다."
+    )
+else:
+    st.success("기본 실행 환경이 준비되어 있습니다. 왼쪽 메뉴에서 1번부터 진행하세요.")
+
+with st.expander("팀원용 빠른 실행 순서", expanded=False):
+    st.code(
+        "git clone https://github.com/kosmos-s/llm-change-auto.git\n"
+        "cd llm-change-auto\n"
+        "setup.bat   # 최초 1회\n"
+        "run.bat     # 이후 실행",
+        language="text",
+    )
+    st.caption("자세한 내용은 저장소 루트의 TEAM_QUICKSTART.md를 참고하세요.")
 
 st.markdown(
     """
@@ -72,4 +109,4 @@ with col6:
     st.page_link("pages/6_LLM_결과_분석.py", label="LLM 결과 분석 열기", icon="🔎")
 
 st.divider()
-st.info("VS Code에서는 `app/run_app.py`를 열고 Ctrl + F5를 누르면 이 통합 UI가 실행됩니다.")
+st.info("Windows 팀원은 최초 1회 `setup.bat`, 이후에는 `run.bat`만 실행하면 됩니다.")
