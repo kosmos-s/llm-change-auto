@@ -48,6 +48,28 @@ class FinalGateCoverageTests(unittest.TestCase):
             self.assertEqual(summary["pending_review_count"], 0)
             self.assertTrue(summary["ready"])
 
+    def test_required_candidate_needs_review_list_even_if_reviewed_json_exists(self):
+        with tempfile.TemporaryDirectory() as temp:
+            outputs = Path(temp)
+            row = self._prepare(outputs)
+            compare = dict(row)
+            compare.update({"work_mode": "production", "review_required_final": True})
+            pd.DataFrame([compare]).to_csv(outputs / "compare_results" / "prod_compare.csv", index=False)
+
+            reviewed = outputs / "reviewed_json" / "errors" / "train" / "a" / "x1_combined.json"
+            reviewed.parent.mkdir(parents=True, exist_ok=True)
+            reviewed.write_text("{}", encoding="utf-8")
+
+            summary = final_gate_summary(outputs, 1)
+            self.assertEqual(summary["pending_review_count"], 0)
+            self.assertEqual(summary["review_list_missing"], 1)
+            self.assertFalse(summary["ready"])
+
+            pd.DataFrame([compare]).to_csv(outputs / "review_lists" / "prod_review.csv", index=False)
+            summary = final_gate_summary(outputs, 1)
+            self.assertEqual(summary["review_list_missing"], 0)
+            self.assertTrue(summary["ready"])
+
     def test_legacy_openai_row_without_work_mode_does_not_count(self):
         with tempfile.TemporaryDirectory() as temp:
             outputs = Path(temp)
