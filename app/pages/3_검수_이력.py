@@ -14,15 +14,18 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from build_review_history import build_review_history
+from project_paths import ensure_output_dirs
+
+OUTPUTS_DIR = ensure_output_dirs(PROJECT_ROOT)
 
 st.title("3. 검수 이력")
 st.caption("최신 reviewed_json 상태와 저장/보류 이벤트를 함께 확인합니다.")
 
-index_path = Path(st.text_input("dataset_index.csv", value=str(PROJECT_ROOT / "outputs" / "dataset_index.csv")))
-reviewed_root = Path(st.text_input("reviewed_json 폴더", value=str(PROJECT_ROOT / "outputs" / "reviewed_json")))
-llm_results_dir = Path(st.text_input("OpenAI 결과 폴더", value=str(PROJECT_ROOT / "outputs" / "llm_results")))
-output_path = Path(st.text_input("최신 검수 이력 CSV", value=str(PROJECT_ROOT / "outputs" / "review_history" / "review_history.csv")))
-event_path = PROJECT_ROOT / "outputs" / "review_events" / "review_events.csv"
+index_path = Path(st.text_input("dataset_index.csv", value=str(OUTPUTS_DIR / "dataset_index.csv")))
+reviewed_root = Path(st.text_input("reviewed_json 폴더", value=str(OUTPUTS_DIR / "reviewed_json")))
+llm_results_dir = Path(st.text_input("OpenAI 결과 폴더", value=str(OUTPUTS_DIR / "llm_results")))
+output_path = Path(st.text_input("최신 검수 이력 CSV", value=str(OUTPUTS_DIR / "review_history" / "review_history.csv")))
+event_path = OUTPUTS_DIR / "review_events" / "review_events.csv"
 
 if st.button("검수 이력 갱신", type="primary", use_container_width=True):
     try:
@@ -73,7 +76,7 @@ st.divider()
 st.markdown("## 저장 이벤트 이력")
 st.caption("사람 검수에서 저장하거나 보류할 때마다 append-only로 기록됩니다. 같은 이미지를 여러 번 수정해도 이전 이벤트가 남습니다.")
 if not event_path.exists():
-    st.info("아직 review_events.csv가 없습니다. 새 버전의 사람 검수 화면에서 저장/보류하면 생성됩니다.")
+    st.info("아직 review_events.csv가 없습니다. 사람 검수 화면에서 저장/보류하면 생성됩니다.")
 else:
     try:
         events = pd.read_csv(event_path)
@@ -92,4 +95,4 @@ else:
         event_bytes = events.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
         st.download_button("review_events.csv 다운로드", event_bytes, file_name="review_events.csv", mime="text/csv", use_container_width=True)
 
-st.info("reviewed_json을 다시 저장할 때 기존 파일은 outputs/backups/reviewed_json 아래에 자동 백업됩니다.")
+st.info(f"reviewed_json을 다시 저장할 때 기존 파일은 {OUTPUTS_DIR / 'backups' / 'reviewed_json'} 아래에 자동 백업됩니다.")
