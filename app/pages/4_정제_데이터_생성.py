@@ -17,6 +17,7 @@ if str(SRC_DIR) not in sys.path:
 
 from data_quality import summarize_quality, validate_index
 from export_clean_dataset import build_clean_manifest
+from make_quality_review_list import make_quality_review_list
 from project_paths import dataset_root_default, ensure_output_dirs
 from quality_actions import build_quality_action_plan
 
@@ -92,6 +93,20 @@ if quality_csv.exists():
             st.dataframe(saved_quality.groupby(["severity", "code"], dropna=False).size().reset_index(name="count"), use_container_width=True, hide_index=True)
     except Exception:
         quality_errors = None
+
+if saved_quality is not None and not saved_quality.empty and "code" in saved_quality.columns:
+    st.markdown("### 품질 이슈를 사람 검수로 보내기")
+    code_options = sorted(saved_quality["code"].dropna().astype(str).unique().tolist())
+    default_codes = [code for code in ["artifact_logic"] if code in code_options]
+    selected_codes = st.multiselect("검수 목록으로 만들 품질 코드", code_options, default=default_codes)
+    quality_review_path = OUTPUTS_DIR / "review_lists" / f"quality_{version}_review.csv"
+    if st.button("품질 검수 목록 생성", use_container_width=True, disabled=not selected_codes):
+        try:
+            review_df = make_quality_review_list(index_csv, quality_csv, quality_review_path, selected_codes)
+            st.success(f"품질 검수 목록 생성 완료: {len(review_df)}건 → {quality_review_path.name}")
+            st.info("2. 사람 검수에서 LLM 검수 대상 CSV 모드로 이 파일을 불러오면 동일한 검수 UI에서 처리할 수 있습니다.")
+        except Exception as exc:
+            st.error(str(exc))
 
 export_blocked = bool((block_on_errors or final_version) and quality_errors is not None and quality_errors > 0)
 if st.button("2) 버전 Snapshot 생성", type="primary", use_container_width=True, disabled=export_blocked):
