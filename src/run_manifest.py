@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from production_integrity import run_manifest_compatible
 from work_plan import file_sha256
 
 
@@ -50,6 +51,24 @@ def build_manifest(
         "settings": settings,
     }
     return manifest
+
+
+def read_manifest(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def validate_resume_manifest(path: Path, current_manifest: dict[str, Any]) -> tuple[bool, list[str]]:
+    """Validate that a batch resume uses the same frozen execution configuration."""
+    existing = read_manifest(path)
+    if not existing:
+        return False, ["existing_manifest_missing_or_invalid"]
+    return run_manifest_compatible(existing, current_manifest)
 
 
 def write_manifest(path: Path, manifest: dict[str, Any]) -> Path:
