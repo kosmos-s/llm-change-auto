@@ -8,6 +8,8 @@ from typing import Any
 import pandas as pd
 
 KEY_COLUMNS = ["group", "split", "relative_folder", "image_id"]
+PRODUCTION_MODES = {"production", "prod", "본작업"}
+TEST_MODES = {"test", "테스트"}
 
 
 def _clean_text(value: Any) -> str:
@@ -61,7 +63,11 @@ def _filter_openai_rows(df: pd.DataFrame, csv_path: Path) -> pd.DataFrame:
 
 
 def unique_openai_results(results_dir: Path) -> pd.DataFrame:
-    """Load all OpenAI CSVs and return one latest row per logical sample."""
+    """Load OpenAI CSVs and return one latest non-test row per logical sample.
+
+    Explicit `work_mode=test` rows are excluded so test runs never inflate the
+    3,000-item production progress. Legacy rows without work_mode are retained.
+    """
     if not results_dir.exists():
         return pd.DataFrame()
 
@@ -87,6 +93,13 @@ def unique_openai_results(results_dir: Path) -> pd.DataFrame:
         if column not in merged.columns:
             merged[column] = "." if column == "relative_folder" else ""
     merged["relative_folder"] = merged["relative_folder"].map(_normalize_folder)
+
+    if "work_mode" in merged.columns:
+        mode = merged["work_mode"].fillna("").astype(str).str.strip().str.lower()
+        merged = merged[~mode.isin(TEST_MODES)].copy()
+
+    if merged.empty:
+        return merged.reset_index(drop=True)
 
     sort_columns = ["_mtime"]
     if "processed_at" in merged.columns:
