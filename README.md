@@ -10,8 +10,10 @@ OpenAI GPT 자동판정
 → 우선순위 검수 대상 추출
 → 사람 최종 검수
 → reviewed_json / 이벤트 이력 축적
+→ 데이터 품질검사 / 품질 이슈 재검수
 → 버전별 정제 데이터 Snapshot
-→ 변화탐지 모델 재학습·평가
+→ 변화탐지 모델 재학습
+→ 기존 모델 vs 정제 모델 F2 비교
 ```
 
 산학과제 최종 목표인 **F2-Score 0.85**는 GPT 일치율이 아니라, 정제된 데이터로 재학습한 변화탐지 모델의 성능 목표입니다.
@@ -41,7 +43,7 @@ ZIP 다운로드 후 압축을 풀어도 됩니다.
 자동으로 다음 작업을 수행합니다.
 
 - `.venv` 생성
-- `requirements.txt` 설치
+- `requirements-lock.txt`가 있으면 고정 버전으로 설치
 - `.env` 생성
 - 필요한 `outputs` 폴더 생성
 - 기본 `dataset_sample` 경로 확인
@@ -53,7 +55,13 @@ ZIP 다운로드 후 압축을 풀어도 됩니다.
 ```text
 OPENAI_API_KEY=your_real_api_key
 OPENAI_TIMEOUT=60
+DATASET_ROOT=
+OPENAI_TARGET_TOTAL=3000
+OPENAI_COST_LIMIT_USD=5
+BACKUP_KEEP_COUNT=10
 ```
+
+`DATASET_ROOT`를 비워두면 기본 위치를 사용합니다.
 
 ### 3. `run.bat` 실행
 
@@ -71,10 +79,16 @@ http://localhost:8501
 
 ## 기본 데이터 위치
 
-프로그램에서 가장 편하게 사용할 수 있는 기본 위치는 다음입니다.
+기본 위치:
 
 ```text
 %USERPROFILE%\Desktop\산학과제\dataset_sample
+```
+
+다른 위치를 사용하려면 `.env`에 입력할 수 있습니다.
+
+```text
+DATASET_ROOT=D:/ECTNFS_WSU/2026/dataset_sample
 ```
 
 권장 구조:
@@ -93,7 +107,7 @@ http://localhost:8501
 └─ llm-change-auto/
 ```
 
-샘플 1건의 기본 구조:
+샘플 1건:
 
 ```text
 00_xxxx_combined.jpg
@@ -110,8 +124,6 @@ errors/train/artifact_fp_00/
 errors/train/farmland_fp_00/
 ```
 
-데이터가 다른 위치에 있어도 `setup.bat`에서 연결하거나, 앱의 **1. OpenAI 자동판정** 화면에서 직접 경로를 입력할 수 있습니다.
-
 ---
 
 ## 화면 사용 순서
@@ -123,6 +135,7 @@ errors/train/farmland_fp_00/
 4. 정제 데이터 생성
 5. 작업 통계
 6. LLM 결과 분석
+7. 모델 성능 비교
 ```
 
 ### 1. OpenAI 자동판정
@@ -132,12 +145,15 @@ errors/train/farmland_fp_00/
 - 데이터 무결성 검사
 - OpenAI Structured Output 판정
 - 매 이미지 처리 후 CSV 즉시 저장
-- 중단 후 Resume
-- 성공 항목 자동 Skip
-- 실패 항목 Retry
-- checkpoint 저장
+- 중단 후 Resume / 성공 항목 Skip
+- 실패 항목 Retry / checkpoint
 - token / 비용 추정
 - 순차 / 균형 / 랜덤 선택
+- **3,000건 목표는 사람 검수 수가 아니라 OpenAI 본작업 고유 처리 수 기준**
+- 본작업 기본 배치 1,000건
+- 1,000건 초과 실행 확인 안전장치
+- 토큰 단가가 0인 본작업은 명시적으로 허용해야 실행 가능
+- 기본 비용 상한은 `.env`의 `OPENAI_COST_LIMIT_USD`
 
 작업 순서:
 
@@ -151,12 +167,12 @@ dataset_index.csv 생성
 
 ### 2. 사람 검수
 
-`LLM 검수 대상 CSV` 모드에서 `outputs/review_lists/*_review.csv`를 불러옵니다.
+`LLM 검수 대상 CSV` 모드에서 가장 최근 `outputs/review_lists/*_review.csv`를 불러옵니다.
 
 본작업 저장 위치:
 
 ```text
-reviewed_json 폴더에 저장
+outputs/reviewed_json/
 ```
 
 원본 JSON 직접 덮어쓰기는 권장하지 않습니다.
@@ -175,40 +191,72 @@ outputs/review_events/review_events.csv
 outputs/backups/reviewed_json/
 ```
 
-### 4. 정제 데이터 생성
+### 4. 정제 데이터 생성 / 품질관리
 
-먼저 `Export 전 품질검사`를 실행한 뒤 snapshot을 생성합니다.
+먼저 `Export 전 품질검사`를 실행합니다.
+
+검사 항목:
+
+- 필수 파일 누락
+- 잘못된 JSON
+- 중복 key
+- 같은 group 내부 split leakage
+- Artifact와 세부 인공물 라벨 논리
+- orphan 파일 세트
+
+품질검사 후 자동으로 `quality_action_plan.csv`가 생성됩니다. 원본 데이터를 자동 삭제하지 않으며, `artifact_logic` 같은 경고는 **품질 검수 목록 생성** 버튼으로 2번 사람 검수 화면에 전달할 수 있습니다.
+
+`final*` 버전은 품질 Error가 1건이라도 있으면 Export가 강제로 차단됩니다.
+
+Snapshot 예시:
 
 ```text
-clean_v1
-clean_v2
-final
-```
-
-예시:
-
-```text
-outputs/clean_datasets/clean_v1/
+outputs/clean_datasets/clean_v1_3000/
 ├─ clean_dataset_manifest.csv
 ├─ quality_report.csv
+├─ quality_action_plan.csv
 ├─ snapshot_summary.json
 └─ json/
 ```
 
-### 5. 작업 통계
+### 5. 작업 통계 / 백업
 
-- OpenAI 고유 처리 건수
-- 사람 검수 완료 수
-- split / 오류유형별 검수량
+- OpenAI 고유 본작업 처리 건수 / 3,000 진행률
+- 사람 검수 완료 수와 OpenAI 대비 검수율
+- split / 오류유형별 현황
 - 원본 라벨 수정률
 - 클래스별 수정률
 - GPT-사람 일치 특성
+- `outputs` 중요 결과 ZIP 백업
+
+백업은 다음 폴더에 저장됩니다.
+
+```text
+outputs/backups/project_outputs/
+```
+
+원본 항공영상은 백업 ZIP에 포함하지 않습니다. 기본 최근 10개를 유지합니다.
 
 ### 6. LLM 결과 분석
 
-GPT와 현재 JSON 라벨의 비교 지표를 확인합니다.
+- Resume 등으로 CSV에 중복 행이 있어도 논리 샘플 키 기준 최신 1건만 분석
+- `GPT ↔ 기존 JSON` 지표
+- `GPT ↔ 사람 최종 라벨` 지표(검수 완료 항목만)
 
-여기의 F2는 **GPT 비교용 F2**이고, 최종 변화탐지 모델 F2와는 별도입니다.
+여기의 F2는 **GPT 비교용 F2**이며, 최종 변화탐지 모델 F2와 별도입니다.
+
+### 7. 모델 성능 비교
+
+재학습이 끝난 뒤 기존 모델과 정제 데이터 모델의 평가 결과를 비교합니다.
+
+지원 입력:
+
+- JSON: `precision`, `recall`, `f1`, `f2`
+- CSV 1행 컬럼형
+- CSV `metric,value` 형식
+- UI 직접 입력
+
+최종적으로 Before / After와 F2 0.85 목표를 한 화면에서 확인합니다.
 
 ---
 
@@ -230,16 +278,19 @@ OpenAI 실행
 → 검수 목록 생성
 → 후보만 사람 검수
 → 검수 이력 갱신
+→ 작업 통계 확인
+→ outputs 백업
 ```
 
 3,000건 전체 작업이 끝난 뒤:
 
 ```text
 품질검사
-→ Error 0 확인
-→ 최종 Snapshot 생성
+→ split leakage / artifact_logic / orphan 확인
+→ Error 0
+→ final Snapshot 생성
 → 변화탐지 모델 재학습
-→ Before / After F2 비교
+→ 7. 모델 성능 비교
 ```
 
 ---
@@ -250,52 +301,51 @@ OpenAI 실행
 outputs/
 ├─ dataset_index.csv
 ├─ llm_results/
-│  ├─ *.csv
-│  └─ *.checkpoint.json
 ├─ compare_results/
 ├─ review_lists/
 ├─ reviewed_json/
 ├─ review_events/
-│  └─ review_events.csv
 ├─ review_history/
-│  └─ review_history.csv
-├─ backups/
-│  └─ reviewed_json/
 ├─ quality/
-│  └─ dataset_quality.csv
-└─ clean_datasets/
+├─ clean_datasets/
+├─ model_eval/
+└─ backups/
+   ├─ reviewed_json/
+   └─ project_outputs/
 ```
 
-본작업이 시작된 뒤 `llm_results`, `review_lists`, `reviewed_json`, `review_events`, `review_history`는 임의 삭제하지 않는 것을 권장합니다.
+본작업이 시작된 뒤 결과 폴더는 임의 삭제하지 않고 5번 화면에서 주기적으로 백업하는 것을 권장합니다.
 
 ---
 
 ## API Key / 보안
 
-실제 API Key는 프로젝트 루트의 로컬 `.env`에만 둡니다.
+실제 API Key는 로컬 `.env`에만 둡니다.
+
+`.env`, 원본 이미지, 실행 결과 CSV/JSON/ZIP은 `.gitignore` 대상입니다.
+
+CI에서는:
 
 ```text
-OPENAI_API_KEY=your_openai_api_key_here
-OPENAI_TIMEOUT=60
+scripts/check_secrets.py
+python -m unittest discover -s tests -v
 ```
 
-`.env`, 원본 이미지, 실행 결과 CSV/JSON은 GitHub에 올리지 않도록 `.gitignore` 처리되어 있습니다.
-
-모델 가격은 변경될 수 있으므로 비용 추정 단가는 UI에서 현재 가격을 직접 입력하는 것을 권장합니다.
+를 실행해 대표적인 API Key 패턴과 회귀 테스트를 검사합니다. 자세한 내용은 [`SECURITY.md`](SECURITY.md)를 참고하세요.
 
 ---
 
-## 수동 설치가 필요한 경우
-
-`setup.bat`을 사용할 수 없다면:
+## 수동 설치
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements-lock.txt
 copy .env.example .env
 python -m streamlit run app\main_app.py
 ```
+
+개발 중 최신 허용 범위로 설치하려면 `requirements.txt`를 사용할 수 있습니다.
 
 ---
 
@@ -312,6 +362,8 @@ GPT 자동판정
 → 오류 후보 선정
 → 사람 검수
 → reviewed_json 확정
+→ 품질검사
+→ 정제 Snapshot
 ```
 
 순서를 유지합니다.
