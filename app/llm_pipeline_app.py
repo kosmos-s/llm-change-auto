@@ -20,11 +20,18 @@ if str(SRC_DIR) not in sys.path:
 from compare_labels import compare
 from data_quality import summarize_quality, validate_index
 from make_review_list import make_review_list
+from project_paths import (
+    dataset_root_default,
+    default_cost_limit_usd,
+    ensure_output_dirs,
+    openai_target_total,
+)
+from results_inventory import unique_openai_results
 from run_llm_labeling import run as run_llm
 from scan_dataset import scan_dataset
 
-
 load_dotenv(PROJECT_ROOT / ".env")
+OUTPUTS_DIR = ensure_output_dirs(PROJECT_ROOT)
 
 st.set_page_config(page_title="OpenAI 자동판정", layout="wide", initial_sidebar_state="expanded")
 
@@ -97,7 +104,7 @@ def show_summary(path: Path) -> None:
 
 
 def reviewed_counts() -> tuple[int, dict[str, int]]:
-    root = PROJECT_ROOT / "outputs" / "reviewed_json"
+    root = OUTPUTS_DIR / "reviewed_json"
     files = list(root.rglob("*.json")) if root.exists() else []
     by_split = {"train": 0, "val": 0, "test": 0}
     for path in files:
@@ -107,6 +114,18 @@ def reviewed_counts() -> tuple[int, dict[str, int]]:
                 by_split[split] += 1
                 break
     return len(files), by_split
+
+
+def production_openai_results() -> pd.DataFrame:
+    frame = unique_openai_results(OUTPUTS_DIR / "llm_results")
+    if frame.empty:
+        return frame
+    if "work_mode" in frame.columns:
+        work_mode = frame["work_mode"].fillna("").astype(str).str.strip().str.lower()
+        production = frame[work_mode.isin(["production", "prod", "본작업"])].copy()
+        if not production.empty:
+            return production
+    return frame
 
 
 def fmt_seconds(seconds: float) -> str:
@@ -124,7 +143,7 @@ def make_default_prefix(work_mode: str, source: str, split: str, start: int, lim
 
 def render_settings() -> dict[str, object]:
     st.sidebar.title("OpenAI 자동판정 설정")
-    default_root = str(Path.home() / "Desktop" / "산학과제" / "dataset_sample")
+    default_root = str(dataset_root_default(PROJECT_ROOT))
     dataset_root = st.sidebar.text_input("데이터 루트 경로", value=default_root)
 
     work_mode = st.sidebar.radio("작업 모드", ["production", "test"], format_func=lambda v: "본작업" if v == "production" else "테스트", horizontal=True)
@@ -132,9 +151,9 @@ def render_settings() -> dict[str, object]:
     split = st.sidebar.radio("분할", SPLIT_OPTIONS, horizontal=True)
     c1, c2 = st.sidebar.columns(2)
     start = int(c1.number_input("시작 번호", min_value=0, value=0, step=1))
-    limit = int(c2.number_input("개수", min_value=1, value=500 if work_mode == "production" else 1, step=1))
+    limit = int(c2.number_input("개수", min_value=1, value=1000 if work_mode == "production" else 1, step=1))
 
-    index_path = PROJECT_ROOT / "outputs" / "dataset_index.csv"
+    index_path = OUTPUTS_DIR / "dataset_index.csv"
     index_df = read_csv_safe(index_path)
     error_types: list[str] = []
     if index_df is not None and source in {"errors", "all"} and "error_type" in index_df.columns:
@@ -162,14 +181,25 @@ def render_settings() -> dict[str, object]:
     st.sidebar.markdown("#### 비용 안전장치")
     input_price = float(st.sidebar.number_input("입력 $ / 1M tokens", min_value=0.0, value=float(os.getenv("OPENAI_INPUT_PRICE_PER_1M", "0") or 0), step=0.01, format="%.4f"))
     output_price = float(st.sidebar.number_input("출력 $ / 1M tokens", min_value=0.0, value=float(os.getenv("OPENAI_OUTPUT_PRICE_PER_1M", "0") or 0), step=0.01, format="%.4f"))
-    cost_limit = float(st.sidebar.number_input("이번 결과파일 비용 상한($, 0=무제한)", min_value=0.0, value=0.0, step=1.0))
+    cost_limit = float(st.sidebar.number_input("이번 결과파일 비용 상한($, 0=무제한)", min_value=0.0, value=default_cost_limit_usd(), step=1.0))
     st.sidebar.caption("가격은 변동될 수 있으므로 현재 OpenAI 가격을 직접 입력하세요. 실제 토큰 사용량은 CSV에 기록됩니다.")
+
+    pricing_ready = input_price > 0 or output_price > 0
+    allow_unpriced = True
+    if work_mode == "production" and not pricing_ready:
+        st.sidebar.warning("본작업인데 토큰 단가가 0입니다. 이 상태에서는 비용 상한을 정확히 계산할 수 없습니다.")
+        allow_unpriced = st.sidebar.checkbox("단가 0 상태로 본작업 실행 허용", value=False)
+
+    batch_size_confirmed = True
+    if work_mode == "production" and limit > 1000:
+        st.sidebar.warning("한 번에 1,000건을 초과했습니다. 배치 분할을 권장합니다.")
+        batch_size_confirmed = st.sidebar.checkbox("1,000건 초과 실행을 확인", value=False)
 
     default_prefix = make_default_prefix(work_mode, source, split, start, limit)
     output_prefix = st.sidebar.text_input("출력 파일 접두어", value=default_prefix)
 
     st.sidebar.divider()
-    if os.getenv("OPENAI_API_KEY"):
+    if os.getenv("OPENAI_API_KEY") and os.getenv("OPENAI_API_KEY") != "your_openai_api_key_here":
         st.sidebar.success("OPENAI_API_KEY 확인됨")
     else:
         st.sidebar.warning("OPENAI_API_KEY가 없습니다. 로컬 .env 파일을 확인하세요.")
@@ -196,7 +226,9 @@ def render_settings() -> dict[str, object]:
         "output_price": output_price,
         "cost_limit": cost_limit,
         "output_prefix": output_prefix.strip() or default_prefix,
-        "api_key_exists": bool(os.getenv("OPENAI_API_KEY")),
+        "api_key_exists": bool(os.getenv("OPENAI_API_KEY") and os.getenv("OPENAI_API_KEY") != "your_openai_api_key_here"),
+        "allow_unpriced": allow_unpriced,
+        "batch_size_confirmed": batch_size_confirmed,
     }
 
 
@@ -206,18 +238,25 @@ def main() -> None:
     st.caption("데이터 인덱스 → GPT 자동판정 → 기존 라벨 비교 → 우선순위 검수 목록")
 
     reviewed_total, reviewed_split = reviewed_counts()
-    goal = 3000
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("사람 검수 완료", f"{reviewed_total:,} / {goal:,}")
-    c2.metric("train", reviewed_split["train"])
-    c3.metric("val", reviewed_split["val"])
-    c4.metric("test", reviewed_split["test"])
-    st.progress(min(reviewed_total / goal, 1.0), text=f"3,000건 목표 진행률 {min(reviewed_total / goal, 1.0):.1%}")
+    llm_all = production_openai_results()
+    llm_count = len(llm_all)
+    goal = openai_target_total()
+    llm_errors = 0
+    if not llm_all.empty and "error" in llm_all.columns:
+        llm_errors = int(llm_all["error"].fillna("").astype(str).str.strip().ne("").sum())
 
-    index_path = PROJECT_ROOT / "outputs" / "dataset_index.csv"
-    llm_path = PROJECT_ROOT / "outputs" / "llm_results" / f"{settings['output_prefix']}.csv"
-    compare_path = PROJECT_ROOT / "outputs" / "compare_results" / f"{settings['output_prefix']}_compare.csv"
-    review_path = PROJECT_ROOT / "outputs" / "review_lists" / f"{settings['output_prefix']}_review.csv"
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("OpenAI 본작업 완료", f"{llm_count:,} / {goal:,}")
+    c2.metric("사람 검수 완료", reviewed_total)
+    c3.metric("OpenAI 목표까지 남음", max(goal - llm_count, 0))
+    c4.metric("현재 OpenAI 오류", llm_errors)
+    st.progress(min(llm_count / goal, 1.0), text=f"OpenAI 본작업 진행률 {llm_count:,}/{goal:,} ({min(llm_count / goal, 1.0):.1%})")
+    st.caption(f"사람 검수는 3,000건 전체가 아니라 자동 선별된 후보만 진행합니다. split별 사람 검수: train {reviewed_split['train']} / val {reviewed_split['val']} / test {reviewed_split['test']}")
+
+    index_path = OUTPUTS_DIR / "dataset_index.csv"
+    llm_path = OUTPUTS_DIR / "llm_results" / f"{settings['output_prefix']}.csv"
+    compare_path = OUTPUTS_DIR / "compare_results" / f"{settings['output_prefix']}_compare.csv"
+    review_path = OUTPUTS_DIR / "review_lists" / f"{settings['output_prefix']}_review.csv"
     checkpoint_path = llm_path.with_suffix(".checkpoint.json")
     prompt_path = path_from_project(str(settings["prompt"]))
 
@@ -237,7 +276,7 @@ def main() -> None:
     with c2:
         if st.button("데이터 무결성 검사", use_container_width=True, disabled=not index_path.exists()):
             report = validate_index(index_path, Path(str(settings["dataset_root"])))
-            report_path = PROJECT_ROOT / "outputs" / "quality" / "dataset_quality.csv"
+            report_path = OUTPUTS_DIR / "quality" / "dataset_quality.csv"
             report_path.parent.mkdir(parents=True, exist_ok=True)
             report.to_csv(report_path, index=False, encoding="utf-8-sig")
             summary = summarize_quality(report)
@@ -267,7 +306,6 @@ def main() -> None:
     progress_bar = st.progress(0.0, text="대기 중")
     metrics = st.empty()
     current_box = st.empty()
-    started_at = time.monotonic()
 
     def progress_callback(state: dict[str, object]) -> None:
         total = int(state.get("total_to_run", 0) or 0)
@@ -292,7 +330,13 @@ def main() -> None:
         elif image_id:
             current_box.info(f"최근 처리: `{image_id}`")
 
-    run_disabled = (not bool(settings["api_key_exists"])) or (not index_path.exists()) or (not overwrite_confirm)
+    run_disabled = (
+        (not bool(settings["api_key_exists"]))
+        or (not index_path.exists())
+        or (not overwrite_confirm)
+        or (not bool(settings["allow_unpriced"]))
+        or (not bool(settings["batch_size_confirmed"]))
+    )
     if st.button("OpenAI 실행 / 이어서 처리", type="primary", use_container_width=True, disabled=run_disabled):
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         try:
@@ -317,7 +361,7 @@ def main() -> None:
                 work_mode=str(settings["work_mode"]),
                 error_types=list(settings["error_types"]),
                 selection_mode=str(settings["selection_mode"]),
-                exclude_reviewed_root=(PROJECT_ROOT / "outputs" / "reviewed_json") if settings["exclude_reviewed"] else None,
+                exclude_reviewed_root=(OUTPUTS_DIR / "reviewed_json") if settings["exclude_reviewed"] else None,
                 input_price_per_million=float(settings["input_price"]),
                 output_price_per_million=float(settings["output_price"]),
                 cost_limit_usd=float(settings["cost_limit"]),
