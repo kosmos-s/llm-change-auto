@@ -130,7 +130,10 @@ def run_manifest_compatible(existing: dict[str, Any], current: dict[str, Any]) -
     }
     old_settings = existing.get("settings") if isinstance(existing.get("settings"), dict) else {}
     new_settings = current.get("settings") if isinstance(current.get("settings"), dict) else {}
-    for key in ["work_mode", "source", "split", "start", "limit", "selection_mode", "confidence"]:
+    for key in [
+        "work_mode", "source", "split", "start", "limit", "selection_mode", "confidence",
+        "input_price", "output_price",
+    ]:
         checks[f"settings.{key}"] = (old_settings.get(key), new_settings.get(key))
 
     mismatches = [name for name, (old, new) in checks.items() if str(old) != str(new)]
