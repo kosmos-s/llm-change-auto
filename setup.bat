@@ -8,26 +8,42 @@ echo LLM Change Auto - Windows Setup
 echo ================================================
 echo.
 
+set "PY_CMD="
 where py >nul 2>nul
 if not errorlevel 1 (
-  set "PY_CMD=py -3"
-) else (
+  py -3.11 -c "import sys; assert sys.version_info[:2] == (3, 11)" >nul 2>nul
+  if not errorlevel 1 set "PY_CMD=py -3.11"
+)
+
+if not defined PY_CMD (
   where python >nul 2>nul
-  if errorlevel 1 (
-    echo [ERROR] Python 3을 찾지 못했습니다.
-    echo Python 3.11 이상 설치 후 다시 실행하세요.
-    pause
-    exit /b 1
+  if not errorlevel 1 (
+    python -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 11) else 1)" >nul 2>nul
+    if not errorlevel 1 set "PY_CMD=python"
   )
-  set "PY_CMD=python"
+)
+
+if not defined PY_CMD (
+  echo [ERROR] Python 3.11을 찾지 못했습니다.
+  echo 이 프로젝트의 고정 패키지 환경은 Python 3.11 기준입니다.
+  echo Python 3.11 설치 시 Add Python to PATH를 체크한 뒤 다시 실행하세요.
+  pause
+  exit /b 1
 )
 
 if not exist ".venv\Scripts\python.exe" (
-  echo [1/5] 가상환경 생성 중...
+  echo [1/5] Python 3.11 가상환경 생성 중...
   !PY_CMD! -m venv .venv
   if errorlevel 1 goto :fail
 ) else (
-  echo [1/5] 기존 가상환경 사용
+  echo [1/5] 기존 가상환경 확인...
+  ".venv\Scripts\python.exe" -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 11) else 1)" >nul 2>nul
+  if errorlevel 1 (
+    echo [ERROR] 기존 .venv가 Python 3.11 환경이 아닙니다.
+    echo .venv 폴더만 삭제한 뒤 setup.bat을 다시 실행하세요.
+    pause
+    exit /b 1
+  )
 )
 
 call ".venv\Scripts\activate.bat"
