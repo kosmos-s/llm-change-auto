@@ -1,4 +1,4 @@
-"""Analyze OpenAI labeling results against the current JSON labels.
+"""Analyze OpenAI labeling results against original or human-confirmed labels.
 
 These metrics describe the LLM-assisted review tool. They are not the final
 change-detection model F2-Score target of the industry project.
@@ -30,24 +30,16 @@ def as_int(value: object) -> int:
     try:
         return int(float(value))
     except Exception:
-        return 0
+        text = str(value).strip().lower()
+        return 1 if text in {"o", "true", "yes", "y"} else 0
 
 
 def safe_div(numerator: float, denominator: float) -> float:
     return numerator / denominator if denominator else 0.0
 
 
-def evaluate_dataframe(df: pd.DataFrame) -> dict[str, object]:
-    if "error" in df.columns:
-        valid = df[df["error"].fillna("").astype(str).str.strip().eq("")].copy()
-    else:
-        valid = df.copy()
-
-    total_rows = len(df)
-    valid_rows = len(valid)
-    api_errors = total_rows - valid_rows
-
-    empty_result = {
+def _empty_result(total_rows: int, valid_rows: int, api_errors: int) -> dict[str, object]:
+    return {
         "total_rows": total_rows,
         "valid_rows": valid_rows,
         "api_errors": api_errors,
@@ -64,16 +56,41 @@ def evaluate_dataframe(df: pd.DataFrame) -> dict[str, object]:
         "detail_exact_match": 0.0,
         "per_label_accuracy": {},
     }
-    if valid.empty:
-        return empty_result
 
-    original_change = valid["original_change"].map(as_int)
-    llm_change = valid["llm_change"].map(as_int)
 
-    tp = int(((original_change == 1) & (llm_change == 1)).sum())
-    tn = int(((original_change == 0) & (llm_change == 0)).sum())
-    fp = int(((original_change == 0) & (llm_change == 1)).sum())
-    fn = int(((original_change == 1) & (llm_change == 0)).sum())
+def evaluate_pair_dataframe(
+    df: pd.DataFrame,
+    *,
+    truth_change_col: str,
+    pred_change_col: str,
+    truth_label_prefix: str,
+    pred_label_prefix: str,
+    error_col: str | None = None,
+) -> dict[str, object]:
+    """Evaluate binary change + detail labels for configurable column prefixes."""
+    if error_col and error_col in df.columns:
+        valid = df[df[error_col].fillna("").astype(str).str.strip().eq("")].copy()
+    else:
+        valid = df.copy()
+
+    if truth_change_col in valid.columns and pred_change_col in valid.columns:
+        truth_present = valid[truth_change_col].notna() & valid[truth_change_col].astype(str).str.strip().ne("")
+        pred_present = valid[pred_change_col].notna() & valid[pred_change_col].astype(str).str.strip().ne("")
+        valid = valid[truth_present & pred_present].copy()
+
+    total_rows = len(df)
+    valid_rows = len(valid)
+    api_errors = total_rows - valid_rows if error_col else 0
+    if valid.empty or truth_change_col not in valid.columns or pred_change_col not in valid.columns:
+        return _empty_result(total_rows, valid_rows, api_errors)
+
+    truth_change = valid[truth_change_col].map(as_int)
+    pred_change = valid[pred_change_col].map(as_int)
+
+    tp = int(((truth_change == 1) & (pred_change == 1)).sum())
+    tn = int(((truth_change == 0) & (pred_change == 0)).sum())
+    fp = int(((truth_change == 0) & (pred_change == 1)).sum())
+    fn = int(((truth_change == 1) & (pred_change == 0)).sum())
 
     accuracy = safe_div(tp + tn, valid_rows)
     precision = safe_div(tp, tp + fp)
@@ -88,18 +105,22 @@ def evaluate_dataframe(df: pd.DataFrame) -> dict[str, object]:
     for _, row in valid.iterrows():
         row_matches = []
         for key in LABEL_KEYS:
-            original_value = as_int(row.get(f"original_{key}", 0))
-            llm_value = as_int(row.get(key, 0))
-            row_matches.append(original_value == llm_value)
-        exact_matches.append(all(row_matches))
+            truth_col = f"{truth_label_prefix}{key}"
+            pred_col = f"{pred_label_prefix}{key}"
+            if truth_col not in valid.columns or pred_col not in valid.columns:
+                continue
+            row_matches.append(as_int(row.get(truth_col, 0)) == as_int(row.get(pred_col, 0)))
+        if row_matches:
+            exact_matches.append(all(row_matches))
 
     for key in LABEL_KEYS:
-        original_column = f"original_{key}"
-        if original_column not in valid.columns or key not in valid.columns:
+        truth_col = f"{truth_label_prefix}{key}"
+        pred_col = f"{pred_label_prefix}{key}"
+        if truth_col not in valid.columns or pred_col not in valid.columns:
             continue
-        original_values = valid[original_column].map(as_int)
-        llm_values = valid[key].map(as_int)
-        per_label_accuracy[key] = float((original_values == llm_values).mean())
+        truth_values = valid[truth_col].map(as_int)
+        pred_values = valid[pred_col].map(as_int)
+        per_label_accuracy[key] = float((truth_values == pred_values).mean())
 
     detail_macro_accuracy = (
         float(sum(per_label_accuracy.values()) / len(per_label_accuracy))
@@ -125,6 +146,29 @@ def evaluate_dataframe(df: pd.DataFrame) -> dict[str, object]:
         "detail_exact_match": detail_exact_match,
         "per_label_accuracy": per_label_accuracy,
     }
+
+
+def evaluate_dataframe(df: pd.DataFrame) -> dict[str, object]:
+    return evaluate_pair_dataframe(
+        df,
+        truth_change_col="original_change",
+        pred_change_col="llm_change",
+        truth_label_prefix="original_",
+        pred_label_prefix="",
+        error_col="error",
+    )
+
+
+def evaluate_history_dataframe(history: pd.DataFrame) -> dict[str, object]:
+    """Evaluate GPT against human-confirmed labels for reviewed rows only."""
+    return evaluate_pair_dataframe(
+        history,
+        truth_change_col="human_change",
+        pred_change_col="llm_change",
+        truth_label_prefix="human_",
+        pred_label_prefix="llm_",
+        error_col="llm_error",
+    )
 
 
 def main() -> None:
