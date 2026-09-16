@@ -12,6 +12,7 @@ from results_inventory import unique_openai_results
 from work_plan import logical_key_frame
 
 TRUE_VALUES = {"true", "1", "yes", "y", "o"}
+PRODUCTION_MODES = {"production", "prod", "본작업"}
 
 
 def _default_plan_for_results(results_dir: Path) -> Path | None:
@@ -43,7 +44,19 @@ def _filter_to_work_plan(rows: pd.DataFrame, work_plan_path: Path | None) -> pd.
 def successful_openai_results(results_dir: Path, work_plan_path: Path | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     if work_plan_path is None:
         work_plan_path = _default_plan_for_results(results_dir)
+    frozen_plan = work_plan_path is not None and work_plan_path.exists()
     all_rows = _filter_to_work_plan(unique_openai_results(results_dir), work_plan_path)
+
+    # Once a production plan is frozen, only rows explicitly created in production
+    # mode may count. Legacy/pilot rows without work_mode and explicit test rows are
+    # ignored even if they happen to share the same logical sample key.
+    if frozen_plan and not all_rows.empty:
+        if "work_mode" not in all_rows.columns:
+            all_rows = all_rows.iloc[0:0].copy()
+        else:
+            mode = all_rows["work_mode"].fillna("").astype(str).str.strip().str.lower()
+            all_rows = all_rows[mode.isin(PRODUCTION_MODES)].copy().reset_index(drop=True)
+
     if all_rows.empty:
         return all_rows.copy(), all_rows.copy()
     if "error" not in all_rows.columns:
@@ -105,10 +118,8 @@ def unresolved_review_items(review_lists_dir: Path, reviewed_root: Path, event_c
                 continue
             if "work_mode" in frame.columns:
                 mode = frame["work_mode"].fillna("").astype(str).str.strip().str.lower()
-                frame = frame[mode.isin({"production", "prod", "본작업"})].copy()
+                frame = frame[mode.isin(PRODUCTION_MODES)].copy()
             elif work_plan_path is not None:
-                # New production review lists always carry work_mode. Legacy/test lists
-                # without it must not satisfy or block a frozen production plan.
                 continue
             if "review_required_final" in frame.columns:
                 frame = frame[frame["review_required_final"].fillna("").astype(str).str.lower().isin(TRUE_VALUES)].copy()
