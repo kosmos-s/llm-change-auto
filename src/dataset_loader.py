@@ -67,35 +67,61 @@ def find_combined_images(root: str | Path, split: str | None = None, source: str
     return sorted(items, key=lambda item: (item.source, item.split, item.relative_folder, item.image_id))
 
 
-def find_items_from_review_csv(csv_path: str | Path) -> list[SampleItem]:
+def _local_paths(dataset_root: Path, source: str, split: str, relative_folder: str, image_id: str) -> tuple[Path, Path, Path, Path]:
+    base = dataset_root / source / split
+    if relative_folder and relative_folder != ".":
+        base = base / Path(relative_folder)
+    combined = base / f"{image_id}_combined.jpg"
+    return (
+        combined,
+        base / f"{image_id}_combined.json",
+        base / f"{image_id}_left.jpg",
+        base / f"{image_id}_right.jpg",
+    )
+
+
+def find_items_from_review_csv(csv_path: str | Path, dataset_root: str | Path | None = None) -> list[SampleItem]:
+    """Load review rows and remap stale absolute paths to the current PC when needed."""
     csv_path = Path(csv_path)
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV 파일을 찾을 수 없습니다: {csv_path}")
     df = pd.read_csv(csv_path)
     if "image_path" not in df.columns:
         raise ValueError("review_list CSV에는 image_path 컬럼이 필요합니다.")
+    local_root = Path(dataset_root) if dataset_root else None
 
     items: list[SampleItem] = []
     for row_index, row in df.reset_index(drop=True).iterrows():
         image_path_text = clean_value(row.get("image_path"))
-        if not image_path_text:
+        image_path = Path(image_path_text) if image_path_text else Path()
+        image_id = clean_value(row.get("image_id")) or (image_path.stem.replace("_combined", "") if image_path_text else "")
+        if not image_id:
             continue
-        image_path = Path(image_path_text)
-        image_id = clean_value(row.get("image_id")) or image_path.stem.replace("_combined", "")
+        split = clean_value(row.get("split")) or (infer_split(image_path) if image_path_text else "unknown")
+        source = clean_value(row.get("group")) or clean_value(row.get("source")) or (infer_source(image_path) if image_path_text else "unknown")
+        if source not in SOURCES:
+            source = "errors" if image_path_text and "errors" in [part.lower() for part in image_path.parts] else "dataset"
+        relative_folder = clean_value(row.get("relative_folder")) or (infer_relative_folder_from_path(image_path, split, source) if image_path_text else ".")
+        relative_folder = relative_folder or "."
+
         suffix = image_path.suffix or ".jpg"
-        parent = image_path.parent
-        stem = image_path.stem.replace("_combined", "")
+        parent = image_path.parent if image_path_text else Path()
+        stem = image_path.stem.replace("_combined", "") if image_path_text else image_id
         json_path_text = clean_value(row.get("json_path"))
         left_path_text = clean_value(row.get("left_image_path"))
         right_path_text = clean_value(row.get("right_image_path"))
         json_path = Path(json_path_text) if json_path_text else parent / f"{stem}_combined.json"
         left_path = Path(left_path_text) if left_path_text else parent / f"{stem}_left{suffix}"
         right_path = Path(right_path_text) if right_path_text else parent / f"{stem}_right{suffix}"
-        split = clean_value(row.get("split")) or infer_split(image_path)
-        source = clean_value(row.get("group")) or clean_value(row.get("source")) or infer_source(image_path)
-        if source not in SOURCES:
-            source = "errors" if "errors" in [part.lower() for part in image_path.parts] else "dataset"
-        relative_folder = clean_value(row.get("relative_folder")) or infer_relative_folder_from_path(image_path, split, source)
+
+        # Review CSVs may have been produced on another PC. If the sender's absolute
+        # paths do not exist locally, reconstruct them from DATASET_ROOT + logical key.
+        if local_root is not None and (not image_path_text or not image_path.exists()):
+            local_combined, local_json, local_left, local_right = _local_paths(
+                local_root, source, split, relative_folder, image_id
+            )
+            image_path, json_path, left_path, right_path = local_combined, local_json, local_left, local_right
+
         error_type = clean_value(row.get("error_type")) or (infer_error_type(relative_folder) if source == "errors" else "")
         llm_info = row_to_llm_info(row.to_dict(), row_index=row_index, csv_path=csv_path)
         items.append(
