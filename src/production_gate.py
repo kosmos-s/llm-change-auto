@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from pipeline_coverage import pipeline_coverage
 from results_inventory import unique_openai_results
 from work_plan import logical_key_frame
 
@@ -138,13 +139,32 @@ def final_gate_summary(outputs_dir: Path, target_total: int) -> dict[str, object
     except Exception:
         plan_count = 0
     effective_target = plan_count or int(target_total)
+    coverage = pipeline_coverage(outputs_dir, work_plan_path) if work_plan_path.exists() else {
+        "target": effective_target,
+        "compare_count": 0,
+        "review_decision_count": 0,
+        "compare_missing": effective_target,
+        "review_decision_missing": effective_target,
+        "ready": False,
+    }
     return {
         "target_total": effective_target,
         "success_count": len(success),
         "failed_count": len(failed),
         "missing_success": max(effective_target - len(success), 0),
+        "compare_count": int(coverage["compare_count"]),
+        "compare_missing": int(coverage["compare_missing"]),
+        "review_decision_count": int(coverage["review_decision_count"]),
+        "review_decision_missing": int(coverage["review_decision_missing"]),
         "pending_review_count": len(pending),
         "deferred_count": int((pending.get("review_state", pd.Series(dtype=str)) == "deferred").sum()) if not pending.empty else 0,
         "work_plan_present": work_plan_path.exists(),
-        "ready": bool(work_plan_path.exists() and len(success) >= effective_target and len(failed) == 0 and len(pending) == 0),
+        "coverage_ready": bool(coverage["ready"]),
+        "ready": bool(
+            work_plan_path.exists()
+            and len(success) >= effective_target
+            and len(failed) == 0
+            and bool(coverage["ready"])
+            and len(pending) == 0
+        ),
     }
