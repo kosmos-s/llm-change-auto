@@ -20,7 +20,7 @@ from evaluate_results import evaluate_history_dataframe
 from model_metrics import compare_metrics, load_metrics_file
 from project_paths import dataset_root_default, openai_target_total
 from quality_actions import build_quality_action_plan
-from results_inventory import deduplicate_result_rows
+from results_inventory import deduplicate_result_rows, unique_openai_results
 
 
 class ProductionSafetyTest(unittest.TestCase):
@@ -32,6 +32,18 @@ class ProductionSafetyTest(unittest.TestCase):
         result = deduplicate_result_rows(frame)
         self.assertEqual(len(result), 1)
         self.assertEqual(int(result.iloc[0]["llm_change"]), 1)
+
+    def test_explicit_test_runs_do_not_count_as_production(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            results_dir = Path(tmp)
+            pd.DataFrame([
+                {"group": "errors", "split": "train", "relative_folder": "a", "image_id": "test_1", "llm_provider": "openai", "work_mode": "test"},
+            ]).to_csv(results_dir / "test_openai_errors_train_00000_00000.csv", index=False)
+            pd.DataFrame([
+                {"group": "errors", "split": "train", "relative_folder": "a", "image_id": "prod_1", "llm_provider": "openai", "work_mode": "production"},
+            ]).to_csv(results_dir / "prod_openai_errors_train_00000_00000.csv", index=False)
+            result = unique_openai_results(results_dir)
+            self.assertEqual(result["image_id"].astype(str).tolist(), ["prod_1"])
 
     def test_human_evaluation_uses_human_truth(self) -> None:
         frame = pd.DataFrame([
