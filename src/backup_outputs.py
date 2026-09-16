@@ -9,6 +9,7 @@ import zipfile
 
 BACKUP_TARGETS = [
     "dataset_index.csv",
+    "work_plan_3000.csv",
     "llm_results",
     "compare_results",
     "review_lists",
@@ -18,6 +19,7 @@ BACKUP_TARGETS = [
     "quality",
     "clean_datasets",
     "model_eval",
+    "run_manifests",
 ]
 
 
