@@ -7,12 +7,25 @@ from pathlib import Path
 import pandas as pd
 
 from results_inventory import unique_openai_results
+from work_plan import logical_key_frame
 
 TRUE_VALUES = {"true", "1", "yes", "y", "o"}
 
 
-def successful_openai_results(results_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
-    all_rows = unique_openai_results(results_dir)
+def _filter_to_work_plan(rows: pd.DataFrame, work_plan_path: Path | None) -> pd.DataFrame:
+    if rows.empty or work_plan_path is None or not work_plan_path.exists():
+        return rows.copy()
+    plan = pd.read_csv(work_plan_path)
+    if plan.empty:
+        return rows.iloc[0:0].copy()
+    plan_keys = set(logical_key_frame(plan).astype(str))
+    copy = rows.copy()
+    copy["_logical_key"] = logical_key_frame(copy)
+    return copy[copy["_logical_key"].isin(plan_keys)].drop(columns=["_logical_key"], errors="ignore").reset_index(drop=True)
+
+
+def successful_openai_results(results_dir: Path, work_plan_path: Path | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    all_rows = _filter_to_work_plan(unique_openai_results(results_dir), work_plan_path)
     if all_rows.empty:
         return all_rows.copy(), all_rows.copy()
     if "error" not in all_rows.columns:
@@ -33,10 +46,12 @@ def latest_review_status(event_csv: Path) -> pd.DataFrame:
     for col, default in [("source", ""), ("split", ""), ("relative_folder", "."), ("image_id", "")]:
         if col not in events.columns:
             events[col] = default
+    folder = events["relative_folder"].fillna(".").astype(str).str.replace("\\", "/", regex=False).str.strip("/")
+    folder = folder.mask(folder.eq(""), ".")
     events["_key"] = (
         events["source"].fillna("").astype(str).str.lower().str.strip()
         + "|" + events["split"].fillna("").astype(str).str.lower().str.strip()
-        + "|" + events["relative_folder"].fillna(".").astype(str).str.replace("\\", "/", regex=False).str.strip("/").replace("", ".")
+        + "|" + folder.str.lower()
         + "|" + events["image_id"].fillna("").astype(str).str.strip()
     )
     if "event_at" in events.columns:
@@ -111,18 +126,27 @@ def unresolved_review_items(review_lists_dir: Path, reviewed_root: Path, event_c
 
 
 def final_gate_summary(outputs_dir: Path, target_total: int) -> dict[str, object]:
-    success, failed = successful_openai_results(outputs_dir / "llm_results")
+    work_plan_path = outputs_dir / "work_plan_3000.csv"
+    success, failed = successful_openai_results(outputs_dir / "llm_results", work_plan_path if work_plan_path.exists() else None)
     pending = unresolved_review_items(
         outputs_dir / "review_lists",
         outputs_dir / "reviewed_json",
         outputs_dir / "review_events" / "review_events.csv",
     )
+    plan_count = 0
+    if work_plan_path.exists():
+        try:
+            plan_count = len(pd.read_csv(work_plan_path))
+        except Exception:
+            plan_count = 0
+    effective_target = plan_count or int(target_total)
     return {
-        "target_total": int(target_total),
+        "target_total": int(effective_target),
         "success_count": int(len(success)),
         "failed_count": int(len(failed)),
-        "missing_success": max(int(target_total) - int(len(success)), 0),
+        "missing_success": max(int(effective_target) - int(len(success)), 0),
         "pending_review_count": int(len(pending)),
         "deferred_count": int((pending.get("review_state", pd.Series(dtype=str)) == "deferred").sum()) if not pending.empty else 0,
-        "ready": bool(len(success) >= int(target_total) and len(failed) == 0 and len(pending) == 0),
+        "work_plan_present": bool(work_plan_path.exists()),
+        "ready": bool(work_plan_path.exists() and len(success) >= int(effective_target) and len(failed) == 0 and len(pending) == 0),
     }
