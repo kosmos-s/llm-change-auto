@@ -55,7 +55,7 @@ errors/test   1,000
 OpenAI 성공 목표 3,000
 ```
 
-`work_plan_3000.csv`는 정확한 작업 대상을 고정합니다. 생성 시 `work_plan_3000.meta.json`에 `dataset_index.csv`와 work plan의 SHA256도 함께 기록합니다. 이후 index 또는 plan이 변경되면 **STALE / BLOCK**으로 처리하고 본작업 실행과 Final Gate를 막습니다.
+`work_plan_3000.csv`는 정확한 작업 대상을 고정합니다. 생성 시 `work_plan_3000.meta.json`에 `dataset_index.csv`와 work plan의 SHA256도 함께 기록합니다. 이후 해당 PC에서 index 또는 plan이 변경되면 **STALE / BLOCK**으로 처리하고 본작업 실행과 Final Gate를 막습니다.
 
 진행률은 결과 행 수가 아니라 **API 오류가 없는 성공 고유 샘플 수**로 계산합니다. 실패 샘플은 3,000건에 포함하지 않습니다.
 
@@ -70,9 +70,9 @@ OpenAI 성공 목표 3,000
 - 보류는 완료가 아니며 Final Gate에서 미해결로 계산
 
 ## 팀원 여러 PC 검수
-8번 **본작업 관리**에서 검수 결과 ZIP을 생성/가져오기 할 수 있습니다. 패키지에는 reviewed JSON 해시뿐 아니라 **dataset_index SHA256 + work-plan SHA256**도 기록합니다. 현재 PC와 다른 본작업 패키지는 병합 자체가 차단됩니다. ZIP 내부 JSON도 manifest SHA256과 다시 대조한 뒤에만 병합합니다.
+8번 **본작업 관리**에서 검수 결과 ZIP을 생성/가져오기 할 수 있습니다. 패키지는 절대경로를 제외한 **portable dataset/work-plan SHA256**으로 같은 본작업인지 확인합니다. 따라서 한 PC가 `C:/Users/A/...`, 다른 PC가 `D:/team/...`처럼 데이터 경로가 달라도 논리적 데이터와 3,000건 대상이 같으면 병합할 수 있습니다.
 
-팀원 PC도 같은 본작업을 사용하려면 `dataset_index.csv`, `work_plan_3000.csv`, `work_plan_3000.meta.json`이 동일해야 합니다. 가장 안전한 방법은 한 PC에서 계획을 고정한 뒤 5번 백업 또는 별도 안전한 전달 방식으로 이 세 파일을 팀원에게 동일하게 배포하는 것입니다.
+review CSV 안의 이미지 경로가 다른 PC 경로여도 파일이 존재하지 않으면 현재 PC의 `DATASET_ROOT + group + split + relative_folder + image_id`로 자동 재구성합니다. ZIP 내부 reviewed JSON은 manifest SHA256과 다시 대조한 뒤에만 병합합니다.
 
 같은 샘플의 JSON이 서로 다르면 conflict로 표시하며 사용자가 `내 PC 결과 유지` 또는 `들어온 결과 사용`을 선택합니다. 병합 후 3번 화면에서 `검수 이력 갱신`을 다시 실행합니다.
 
