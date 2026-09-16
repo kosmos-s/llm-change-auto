@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -30,13 +31,15 @@ st.info("이 화면의 F2가 산학과제 최종 모델 성능 비교용입니�
 def metrics_from_upload(uploaded) -> dict[str, float]:
     if uploaded is None:
         return {}
-    suffix = Path(uploaded.name).suffix.lower()
+    safe_name = Path(uploaded.name).name
+    suffix = Path(safe_name).suffix.lower()
     if suffix == ".json":
         data = json.loads(uploaded.getvalue().decode("utf-8"))
-        normalized = {str(k).lower(): float(v) for k, v in data.items() if str(k).lower() in {"precision", "recall", "f1", "f2"}}
-        return normalized
+        if not isinstance(data, dict):
+            raise ValueError("JSON은 metric:value 객체여야 합니다.")
+        return {str(k).lower(): float(v) for k, v in data.items() if str(k).lower() in {"precision", "recall", "f1", "f2"}}
     frame = pd.read_csv(io.BytesIO(uploaded.getvalue()))
-    temp = MODEL_EVAL_DIR / f"_upload_{uploaded.name}"
+    temp = MODEL_EVAL_DIR / f"_upload_{safe_name}"
     frame.to_csv(temp, index=False)
     try:
         return load_metrics_file(temp)
@@ -82,6 +85,13 @@ def load_source(label: str, default_path: Path, key_prefix: str) -> dict[str, fl
     return {"precision": precision, "recall": recall, "f1": f1, "f2": f2}
 
 
+def json_number(value):
+    if value is None or pd.isna(value):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
 left, right = st.columns(2)
 with left:
     before = load_source("기존 모델 (Baseline)", MODEL_EVAL_DIR / "baseline_metrics.json", "before")
@@ -104,9 +114,9 @@ if before and after:
         c4.metric("목표 F2 0.85", "달성" if after_f2 >= 0.85 else f"{0.85 - after_f2:.4f} 남음")
 
     export = {
-        "baseline": before,
-        "cleaned": after,
-        "delta": {row["metric"]: row["delta"] for _, row in comparison.iterrows()},
+        "baseline": {key: json_number(value) for key, value in before.items()},
+        "cleaned": {key: json_number(value) for key, value in after.items()},
+        "delta": {str(row["metric"]): json_number(row["delta"]) for _, row in comparison.iterrows()},
     }
     st.download_button(
         "비교 결과 JSON 다운로드",
