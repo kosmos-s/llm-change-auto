@@ -12,8 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from production_integrity import validate_plan_binding
-from work_plan import file_sha256
+from production_integrity import portable_csv_sha256, validate_plan_binding
 
 
 def _sha256(path: Path) -> str:
@@ -45,8 +44,8 @@ def _production_fingerprint(outputs_dir: Path) -> dict[str, str]:
     if not binding["ready"]:
         raise ValueError("현재 dataset_index/work plan 고정 상태가 유효하지 않습니다: " + ", ".join(binding["reasons"]))
     return {
-        "dataset_index_sha256": file_sha256(index_path),
-        "work_plan_sha256": file_sha256(plan_path),
+        "dataset_index_portable_sha256": portable_csv_sha256(index_path),
+        "work_plan_portable_sha256": portable_csv_sha256(plan_path),
     }
 
 
@@ -72,7 +71,7 @@ def export_review_package(outputs_dir: Path, reviewer_name: str) -> Path:
             "review_package_manifest.json",
             json.dumps(
                 {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "reviewer_name": reviewer_name.strip() or "unknown",
                     "created_at": datetime.now().isoformat(timespec="seconds"),
                     "file_count": len(files),
@@ -92,8 +91,7 @@ def _compatibility(manifest: dict[str, object], outputs_dir: Path) -> tuple[bool
         fingerprint = _production_fingerprint(outputs_dir)
     except Exception as exc:
         return False, [str(exc)]
-
-    for key in ["dataset_index_sha256", "work_plan_sha256"]:
+    for key in ["dataset_index_portable_sha256", "work_plan_portable_sha256"]:
         incoming = str(manifest.get(key, ""))
         current = fingerprint[key]
         if not incoming:
@@ -128,13 +126,7 @@ def preview_review_package(zip_path: Path, outputs_dir: Path) -> dict[str, objec
             incoming.append(row)
             if state == "conflict":
                 conflicts.append(row)
-    return {
-        "manifest": manifest,
-        "items": incoming,
-        "conflicts": conflicts,
-        "compatible": compatible,
-        "compatibility_errors": compatibility_errors,
-    }
+    return {"manifest": manifest, "items": incoming, "conflicts": conflicts, "compatible": compatible, "compatibility_errors": compatibility_errors}
 
 
 def _merge_events(archive: zipfile.ZipFile, outputs_dir: Path) -> int:
@@ -178,7 +170,6 @@ def merge_review_package(zip_path: Path, outputs_dir: Path, *, conflict_policy: 
             incoming_bytes = archive.read(member)
             if _bytes_sha256(incoming_bytes) != incoming_sha:
                 raise ValueError(f"병합 직전 package 파일 해시 불일치: {member}")
-
             if target.exists():
                 local_sha = _sha256(target)
                 if local_sha == incoming_sha:
@@ -192,7 +183,6 @@ def merge_review_package(zip_path: Path, outputs_dir: Path, *, conflict_policy: 
                 shutil.copy2(target, backup)
             else:
                 stats["new"] += 1
-
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(incoming_bytes)
             stats["written"] += 1
