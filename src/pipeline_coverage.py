@@ -1,4 +1,4 @@
-"""Coverage checks for the OpenAI -> compare -> review-decision production pipeline."""
+"""Coverage checks for the production OpenAI -> compare -> review workflow."""
 
 from __future__ import annotations
 
@@ -6,9 +6,12 @@ from pathlib import Path
 
 import pandas as pd
 
+from results_inventory import unique_openai_results
 from work_plan import logical_key_frame
 
 PRODUCTION_MODES = {"production", "prod", "본작업"}
+TRUE_VALUES = {"true", "1", "yes", "y", "o"}
+SIGNATURE_COLUMNS = ["run_id", "processed_at", "response_id"]
 
 
 def _plan_keys(work_plan_path: Path) -> set[str]:
@@ -20,26 +23,27 @@ def _plan_keys(work_plan_path: Path) -> set[str]:
     return set(logical_key_frame(plan).astype(str))
 
 
+def _production_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty or "image_id" not in frame.columns or "work_mode" not in frame.columns:
+        return frame.iloc[0:0].copy()
+    mode = frame["work_mode"].fillna("").astype(str).str.strip().str.lower()
+    return frame[mode.isin(PRODUCTION_MODES)].copy()
+
+
 def _rows_from_csv_dir(directory: Path, pattern: str) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
     if not directory.exists():
         return pd.DataFrame()
-    for path in sorted(directory.glob(pattern)):
+    for order, path in enumerate(sorted(directory.glob(pattern))):
         try:
             frame = pd.read_csv(path)
         except Exception:
             continue
-        if frame.empty or "image_id" not in frame.columns:
-            continue
-
-        # Final production coverage must never be satisfied by test/pilot compare files.
-        # Current production outputs always carry work_mode from the OpenAI result row.
-        if "work_mode" not in frame.columns:
-            continue
-        mode = frame["work_mode"].fillna("").astype(str).str.strip().str.lower()
-        frame = frame[mode.isin(PRODUCTION_MODES)].copy()
+        frame = _production_rows(frame)
         if frame.empty:
             continue
+        frame["_source_mtime"] = path.stat().st_mtime
+        frame["_source_order"] = order
         frames.append(frame)
     return pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
 
@@ -52,39 +56,130 @@ def _with_logical_key(rows: pd.DataFrame) -> pd.DataFrame:
     return copy
 
 
-def _coverage_count(rows: pd.DataFrame, plan_keys: set[str]) -> int:
+def _latest_rows(rows: pd.DataFrame, plan_keys: set[str]) -> pd.DataFrame:
     keyed = _with_logical_key(rows)
     if keyed.empty or not plan_keys:
-        return 0
-    return int(keyed[keyed["_logical_key"].isin(plan_keys)]["_logical_key"].drop_duplicates().shape[0])
+        return keyed.iloc[0:0].copy()
+    keyed = keyed[keyed["_logical_key"].isin(plan_keys)].copy()
+    if keyed.empty:
+        return keyed
+    keyed["_row_order"] = range(len(keyed))
+    sort_columns: list[str] = []
+    if "processed_at" in keyed.columns:
+        keyed["_processed_order"] = pd.to_datetime(keyed["processed_at"], errors="coerce")
+        sort_columns.append("_processed_order")
+    if "_source_mtime" in keyed.columns:
+        sort_columns.append("_source_mtime")
+    if "_source_order" in keyed.columns:
+        sort_columns.append("_source_order")
+    sort_columns.append("_row_order")
+    keyed = keyed.sort_values(sort_columns, na_position="first", kind="stable")
+    return keyed.drop_duplicates("_logical_key", keep="last").reset_index(drop=True)
+
+
+def _signature_series(rows: pd.DataFrame) -> pd.Series:
+    if rows.empty:
+        return pd.Series(dtype=str)
+    parts = []
+    for column in SIGNATURE_COLUMNS:
+        if column in rows.columns:
+            parts.append(rows[column].fillna("").astype(str).str.strip())
+        else:
+            parts.append(pd.Series("", index=rows.index, dtype=str))
+    signature = parts[0]
+    for part in parts[1:]:
+        signature = signature + "|" + part
+    return signature
+
+
+def _latest_openai_rows(outputs_dir: Path, plan_keys: set[str]) -> pd.DataFrame:
+    rows = unique_openai_results(outputs_dir / "llm_results")
+    rows = _production_rows(rows)
+    return _latest_rows(rows, plan_keys)
+
+
+def _fresh_compare_rows(outputs_dir: Path, work_plan_path: Path) -> tuple[pd.DataFrame, int]:
+    plan_keys = _plan_keys(work_plan_path)
+    latest_compare = _latest_rows(
+        _rows_from_csv_dir(outputs_dir / "compare_results", "*_compare.csv"),
+        plan_keys,
+    )
+    latest_openai = _latest_openai_rows(outputs_dir, plan_keys)
+    if latest_compare.empty or latest_openai.empty:
+        return latest_compare.iloc[0:0].copy(), len(latest_compare)
+
+    compare = latest_compare.copy()
+    openai = latest_openai.copy()
+    compare["_execution_signature"] = _signature_series(compare)
+    openai["_execution_signature"] = _signature_series(openai)
+    expected = openai.set_index("_logical_key")["_execution_signature"].to_dict()
+    fresh_mask = compare.apply(
+        lambda row: bool(expected.get(str(row["_logical_key"]), ""))
+        and str(row["_execution_signature"]) == str(expected.get(str(row["_logical_key"]), "")),
+        axis=1,
+    )
+    fresh = compare[fresh_mask].copy().reset_index(drop=True)
+    stale_count = int(len(compare) - len(fresh))
+    return fresh, stale_count
+
+
+def current_required_review_rows(outputs_dir: Path, work_plan_path: Path) -> pd.DataFrame:
+    """Return current, fresh production compare rows that require human review."""
+    fresh_compare, _ = _fresh_compare_rows(outputs_dir, work_plan_path)
+    if fresh_compare.empty or "review_required_final" not in fresh_compare.columns:
+        return fresh_compare.iloc[0:0].copy()
+    required = fresh_compare["review_required_final"].fillna("").astype(str).str.strip().str.lower().isin(TRUE_VALUES)
+    return fresh_compare[required].copy().reset_index(drop=True)
 
 
 def pipeline_coverage(outputs_dir: Path, work_plan_path: Path) -> dict[str, int | bool]:
-    """Return unique production work-plan coverage at compare/review-decision stages.
+    """Return production coverage using only fresh outputs for the frozen work plan.
 
-    `make_review_list` intentionally contains only rows that actually require human
-    review, so it cannot prove that all production samples received a review decision.
-    The decision itself is produced by compare_labels as `review_required_final`.
-    Therefore review-decision coverage is measured from production compare rows where
-    that field exists and is non-empty.
+    A compare row is considered fresh only when its execution signature matches the
+    latest OpenAI row for the same logical sample. Current review-required samples must
+    also be present in a production review-list CSV, preventing Final from becoming
+    READY when the user forgot to regenerate the review list.
     """
     plan_keys = _plan_keys(work_plan_path)
     target = len(plan_keys)
-    compare_rows = _rows_from_csv_dir(outputs_dir / "compare_results", "*_compare.csv")
-    compare_count = _coverage_count(compare_rows, plan_keys)
+    fresh_compare, stale_compare_count = _fresh_compare_rows(outputs_dir, work_plan_path)
+    compare_count = int(len(fresh_compare))
 
-    decision_rows = compare_rows.iloc[0:0].copy()
-    if not compare_rows.empty and "review_required_final" in compare_rows.columns:
-        values = compare_rows["review_required_final"]
+    decision_rows = fresh_compare.iloc[0:0].copy()
+    if not fresh_compare.empty and "review_required_final" in fresh_compare.columns:
+        values = fresh_compare["review_required_final"]
         decided = values.notna() & values.astype(str).str.strip().ne("")
-        decision_rows = compare_rows[decided].copy()
-    review_decision_count = _coverage_count(decision_rows, plan_keys)
+        decision_rows = fresh_compare[decided].copy()
+    review_decision_count = int(len(decision_rows))
+
+    required_rows = current_required_review_rows(outputs_dir, work_plan_path)
+    required_keys = set(required_rows.get("_logical_key", pd.Series(dtype=str)).astype(str))
+    review_required_count = len(required_keys)
+
+    review_rows = _latest_rows(
+        _rows_from_csv_dir(outputs_dir / "review_lists", "*_review.csv"),
+        plan_keys,
+    )
+    review_list_keys = set(review_rows.get("_logical_key", pd.Series(dtype=str)).astype(str))
+    listed_required = required_keys & review_list_keys
+    review_list_count = len(listed_required)
+    review_list_missing = max(review_required_count - review_list_count, 0)
 
     return {
         "target": target,
         "compare_count": compare_count,
+        "stale_compare_count": stale_compare_count,
         "review_decision_count": review_decision_count,
+        "review_required_count": review_required_count,
+        "review_list_count": review_list_count,
+        "review_list_missing": review_list_missing,
         "compare_missing": max(target - compare_count, 0),
         "review_decision_missing": max(target - review_decision_count, 0),
-        "ready": bool(target > 0 and compare_count >= target and review_decision_count >= target),
+        "ready": bool(
+            target > 0
+            and compare_count >= target
+            and review_decision_count >= target
+            and stale_compare_count == 0
+            and review_list_missing == 0
+        ),
     }
