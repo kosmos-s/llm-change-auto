@@ -16,6 +16,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from data_quality import summarize_quality, validate_index
+from effective_quality import validate_effective_labels
 from export_clean_dataset import build_clean_manifest
 from make_quality_review_list import make_quality_review_list
 from production_gate import final_gate_summary
@@ -25,16 +26,17 @@ from quality_actions import build_quality_action_plan, build_split_leakage_detai
 OUTPUTS_DIR = ensure_output_dirs(PROJECT_ROOT)
 
 st.title("4. 정제 데이터 생성")
-st.caption("Export 전에 데이터 무결성, OpenAI 성공 목표, 미검수/보류 상태를 확인하고 버전 snapshot을 생성합니다.")
+st.caption("Export 전에 데이터 무결성, 최종 선택 JSON, OpenAI 성공 목표, 미검수/보류 상태를 확인하고 버전 snapshot을 생성합니다.")
 
 index_csv = Path(st.text_input("dataset_index.csv", value=str(OUTPUTS_DIR / "dataset_index.csv")))
 reviewed_root = Path(st.text_input("reviewed_json 폴더", value=str(OUTPUTS_DIR / "reviewed_json")))
 dataset_root_text = st.text_input("원본 데이터 루트(무결성 검사 보강용, 선택)", value=str(dataset_root_default(PROJECT_ROOT)))
-version = st.text_input("정제 데이터 버전", value="clean_v1_3000").strip() or "clean_v1_3000"
+version = st.text_input("정제 데이터 버전", value="final_3000").strip() or "final_3000"
 version_root = OUTPUTS_DIR / "clean_datasets" / version
 output_csv = version_root / "clean_dataset_manifest.csv"
 clean_root = version_root / "json"
 quality_csv = version_root / "quality_report.csv"
+effective_quality_csv = version_root / "effective_quality_report.csv"
 action_csv = version_root / "quality_action_plan.csv"
 summary_json = version_root / "snapshot_summary.json"
 
@@ -44,14 +46,14 @@ final_version = version.strip().lower() in {"final", "final_3000"} or version.st
 production_gate = final_gate_summary(OUTPUTS_DIR, openai_target_total())
 
 if final_version:
-    st.info("final 버전은 무결성 Error=0, OpenAI 성공 목표 달성, API 오류=0, 미검수/보류=0을 모두 만족해야 생성됩니다.")
+    st.info("final 버전은 원본 구조 품질 Error=0, effective JSON Error=0, Plan Binding 정상, OpenAI/Compare/Review coverage 100%, API 오류=0, 미검수/보류=0을 모두 만족해야 생성됩니다.")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("OpenAI 성공", f"{production_gate['success_count']}/{production_gate['target_total']}")
-    c2.metric("API 오류", production_gate["failed_count"])
+    c2.metric("Compare / Review", f"{production_gate['compare_count']}/{production_gate['review_decision_count']}")
     c3.metric("미검수/보류", production_gate["pending_review_count"])
     c4.metric("Production Gate", "READY" if production_gate["ready"] else "BLOCK")
 
-st.info("reviewed_json이 있으면 사람 확정본을 사용하고, 없으면 원본 JSON을 사용합니다. 단 final 버전에서는 미검수 후보가 남아 있으면 Export를 막습니다.")
+st.info("reviewed_json이 있으면 사람 확정본을 사용하고, 없으면 원본 JSON을 사용합니다. final 버전에서는 실제 선택될 effective JSON도 별도로 검사합니다.")
 
 quality_report: pd.DataFrame | None = None
 if st.button("1) Export 전 품질검사", type="primary", use_container_width=True):
@@ -63,18 +65,25 @@ if st.button("1) Export 전 품질검사", type="primary", use_container_width=T
         action_plan = build_quality_action_plan(quality_report)
         action_plan.to_csv(action_csv, index=False, encoding="utf-8-sig")
         summary = summarize_quality(quality_report)
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Error", summary["errors"])
+
+        effective_report = validate_effective_labels(index_csv, reviewed_root)
+        effective_report.to_csv(effective_quality_csv, index=False, encoding="utf-8-sig")
+        effective_errors = int((effective_report["severity"].astype(str).str.lower() == "error").sum()) if not effective_report.empty else 0
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("구조 Error", summary["errors"])
         c2.metric("Warning", summary["warnings"])
-        c3.metric("Total", summary["total"])
-        if summary["errors"]:
-            st.error("무결성 error가 있습니다. final Export 전에는 반드시 0으로 만들어야 합니다.")
+        c3.metric("Effective JSON Error", effective_errors)
+        c4.metric("총 이슈", summary["total"] + len(effective_report))
+        if summary["errors"] or effective_errors:
+            st.error("차단 오류가 있습니다. final Export 전에는 구조 Error와 Effective JSON Error를 모두 0으로 만들어야 합니다.")
         elif summary["warnings"]:
             st.warning("Error는 없지만 warning이 있습니다. 아래 조치 계획을 확인하세요.")
         else:
             st.success("품질검사 통과")
+
         if not quality_report.empty:
-            st.markdown("### 품질 이슈")
+            st.markdown("### 원본 구조 품질 이슈")
             st.dataframe(quality_report.head(300), use_container_width=True)
             st.markdown("### 안전 조치 계획")
             st.dataframe(action_plan.head(300), use_container_width=True, hide_index=True)
@@ -84,22 +93,34 @@ if st.button("1) Export 전 품질검사", type="primary", use_container_width=T
                 file_name=f"{version}_quality_action_plan.csv",
                 mime="text/csv",
             )
+        if not effective_report.empty:
+            st.markdown("### 실제 Snapshot에 선택될 JSON 이슈")
+            st.dataframe(effective_report.head(300), use_container_width=True, hide_index=True)
     except Exception as exc:
         st.error(str(exc))
 
 quality_errors = None
+effective_errors = None
 saved_quality: pd.DataFrame | None = None
 if quality_csv.exists():
     try:
         saved_quality = pd.read_csv(quality_csv)
         saved_summary = summarize_quality(saved_quality)
         quality_errors = saved_summary["errors"]
-        st.caption(f"현재 버전 저장 품질검사: error={saved_summary['errors']}, warning={saved_summary['warnings']}")
+        st.caption(f"현재 버전 저장 구조 품질검사: error={saved_summary['errors']}, warning={saved_summary['warnings']}")
         if not saved_quality.empty and "code" in saved_quality.columns:
             st.markdown("### 이슈 유형별 개수")
             st.dataframe(saved_quality.groupby(["severity", "code"], dropna=False).size().reset_index(name="count"), use_container_width=True, hide_index=True)
     except Exception:
         quality_errors = None
+
+if effective_quality_csv.exists():
+    try:
+        saved_effective = pd.read_csv(effective_quality_csv)
+        effective_errors = int((saved_effective["severity"].fillna("").astype(str).str.lower() == "error").sum()) if not saved_effective.empty else 0
+        st.caption(f"현재 버전 저장 Effective JSON 검사: error={effective_errors}")
+    except Exception:
+        effective_errors = None
 
 if saved_quality is not None and not saved_quality.empty and "code" in saved_quality.columns:
     if (saved_quality["code"].astype(str) == "split_leakage").any() and index_csv.exists():
@@ -132,21 +153,40 @@ if saved_quality is not None and not saved_quality.empty and "code" in saved_qua
         except Exception as exc:
             st.error(str(exc))
 
-quality_blocked = bool((block_on_errors or final_version) and quality_errors is not None and quality_errors > 0)
+quality_missing = quality_errors is None
+effective_missing = effective_errors is None
+quality_blocked = bool((block_on_errors or final_version) and (quality_missing or (quality_errors or 0) > 0))
+effective_blocked = bool(final_version and (effective_missing or (effective_errors or 0) > 0))
 production_blocked = bool(final_version and not production_gate["ready"])
-export_blocked = quality_blocked or production_blocked
+export_blocked = quality_blocked or effective_blocked or production_blocked
 
 if production_blocked:
     st.error("Final Production Gate가 BLOCK 상태입니다. 8. 본작업 관리에서 미완료 항목을 확인하세요.")
+if final_version and effective_blocked:
+    st.error("Effective JSON 검사가 없거나 오류가 남아 있습니다. 품질검사를 다시 실행하세요.")
 
 if st.button("2) 버전 Snapshot 생성", type="primary", use_container_width=True, disabled=export_blocked):
     try:
         if (block_on_errors or final_version) and not quality_csv.exists():
             st.warning("먼저 품질검사를 실행하세요.")
             st.stop()
+        if final_version and not effective_quality_csv.exists():
+            st.warning("먼저 Effective JSON 품질검사를 실행하세요.")
+            st.stop()
         if final_version and not production_gate["ready"]:
             st.error("Final Production Gate 조건을 만족하지 않습니다.")
             st.stop()
+
+        # Re-run effective validation immediately before export so a reviewed JSON
+        # changed after the previous report cannot slip into the final snapshot.
+        if final_version:
+            live_effective = validate_effective_labels(index_csv, reviewed_root)
+            live_errors = int((live_effective["severity"].astype(str).str.lower() == "error").sum()) if not live_effective.empty else 0
+            live_effective.to_csv(effective_quality_csv, index=False, encoding="utf-8-sig")
+            if live_errors:
+                st.error(f"Snapshot 직전 Effective JSON 재검사에서 {live_errors}개 오류가 발견되었습니다.")
+                st.stop()
+
         with st.spinner("정제 데이터 snapshot 생성 중..."):
             result = build_clean_manifest(
                 index_csv=index_csv,
@@ -166,8 +206,10 @@ if st.button("2) 버전 Snapshot 생성", type="primary", use_container_width=Tr
             "original_samples": original_count,
             "reviewed_ratio": reviewed_count / len(result) if len(result) else 0.0,
             "quality_errors": int(quality_errors or 0),
+            "effective_quality_errors": int(effective_errors or 0),
             "production_gate": production_gate,
             "quality_report": str(quality_csv),
+            "effective_quality_report": str(effective_quality_csv),
             "quality_action_plan": str(action_csv),
             "copy_selected_json": bool(copy_json),
         }
