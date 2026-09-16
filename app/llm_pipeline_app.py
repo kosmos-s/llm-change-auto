@@ -20,14 +20,10 @@ if str(SRC_DIR) not in sys.path:
 from compare_labels import compare
 from data_quality import summarize_quality, validate_index
 from make_review_list import make_review_list
-from project_paths import (
-    dataset_root_default,
-    default_cost_limit_usd,
-    ensure_output_dirs,
-    openai_target_total,
-)
-from results_inventory import unique_openai_results
+from production_gate import successful_openai_results
+from project_paths import dataset_root_default, default_cost_limit_usd, ensure_output_dirs, openai_target_total
 from run_llm_labeling import run as run_llm
+from run_manifest import build_manifest, write_manifest
 from scan_dataset import scan_dataset
 
 load_dotenv(PROJECT_ROOT / ".env")
@@ -94,9 +90,6 @@ def show_summary(path: Path) -> None:
     with st.expander("요약 보기", expanded=False):
         if "group" in df.columns and "split" in df.columns:
             st.dataframe(df.groupby(["group", "split"], dropna=False).size().reset_index(name="count"), use_container_width=True)
-        if "llm_provider" in df.columns:
-            group_cols = [col for col in ["llm_provider", "llm_model"] if col in df.columns]
-            st.dataframe(df.groupby(group_cols, dropna=False).size().reset_index(name="count"), use_container_width=True)
         if "review_reasons" in df.columns:
             st.dataframe(df.groupby("review_reasons", dropna=False).size().reset_index(name="count"), use_container_width=True)
         if "confidence" in df.columns:
@@ -116,18 +109,6 @@ def reviewed_counts() -> tuple[int, dict[str, int]]:
     return len(files), by_split
 
 
-def production_openai_results() -> pd.DataFrame:
-    frame = unique_openai_results(OUTPUTS_DIR / "llm_results")
-    if frame.empty:
-        return frame
-    if "work_mode" in frame.columns:
-        work_mode = frame["work_mode"].fillna("").astype(str).str.strip().str.lower()
-        production = frame[work_mode.isin(["production", "prod", "본작업"])].copy()
-        if not production.empty:
-            return production
-    return frame
-
-
 def fmt_seconds(seconds: float) -> str:
     seconds = max(int(seconds or 0), 0)
     h, rem = divmod(seconds, 3600)
@@ -143,9 +124,7 @@ def make_default_prefix(work_mode: str, source: str, split: str, start: int, lim
 
 def render_settings() -> dict[str, object]:
     st.sidebar.title("OpenAI 자동판정 설정")
-    default_root = str(dataset_root_default(PROJECT_ROOT))
-    dataset_root = st.sidebar.text_input("데이터 루트 경로", value=default_root)
-
+    dataset_root = st.sidebar.text_input("데이터 루트 경로", value=str(dataset_root_default(PROJECT_ROOT)))
     work_mode = st.sidebar.radio("작업 모드", ["production", "test"], format_func=lambda v: "본작업" if v == "production" else "테스트", horizontal=True)
     source = st.sidebar.radio("데이터 종류", SOURCE_OPTIONS, horizontal=True)
     split = st.sidebar.radio("분할", SPLIT_OPTIONS, horizontal=True)
@@ -160,13 +139,8 @@ def render_settings() -> dict[str, object]:
         options = sorted(v for v in index_df["error_type"].fillna("").astype(str).unique() if v)
         error_types = st.sidebar.multiselect("errors 유형", options, default=[])
 
-    selection_mode = st.sidebar.selectbox(
-        "대상 선택 방식",
-        ["sequential", "balanced", "random"],
-        format_func=lambda v: {"sequential": "순차", "balanced": "오류유형 균형", "random": "랜덤"}[v],
-    )
+    selection_mode = st.sidebar.selectbox("대상 선택 방식", ["sequential", "balanced", "random"], format_func=lambda v: {"sequential": "순차", "balanced": "오류유형 균형", "random": "랜덤"}[v])
     exclude_reviewed = st.sidebar.checkbox("이미 사람 검수한 항목 제외", value=True)
-
     model = st.sidebar.text_input("OpenAI 모델", value="gpt-4o-mini")
     prompt = st.sidebar.selectbox("프롬프트", PROMPT_OPTIONS, index=0)
     confidence = st.sidebar.slider("검수 기준 confidence", 0.0, 1.0, 0.70, 0.05)
@@ -182,78 +156,56 @@ def render_settings() -> dict[str, object]:
     input_price = float(st.sidebar.number_input("입력 $ / 1M tokens", min_value=0.0, value=float(os.getenv("OPENAI_INPUT_PRICE_PER_1M", "0") or 0), step=0.01, format="%.4f"))
     output_price = float(st.sidebar.number_input("출력 $ / 1M tokens", min_value=0.0, value=float(os.getenv("OPENAI_OUTPUT_PRICE_PER_1M", "0") or 0), step=0.01, format="%.4f"))
     cost_limit = float(st.sidebar.number_input("이번 결과파일 비용 상한($, 0=무제한)", min_value=0.0, value=default_cost_limit_usd(), step=1.0))
-    st.sidebar.caption("가격은 변동될 수 있으므로 현재 OpenAI 가격을 직접 입력하세요. 실제 토큰 사용량은 CSV에 기록됩니다.")
-
     pricing_ready = input_price > 0 or output_price > 0
     allow_unpriced = True
     if work_mode == "production" and not pricing_ready:
-        st.sidebar.warning("본작업인데 토큰 단가가 0입니다. 이 상태에서는 비용 상한을 정확히 계산할 수 없습니다.")
+        st.sidebar.warning("본작업인데 토큰 단가가 0입니다.")
         allow_unpriced = st.sidebar.checkbox("단가 0 상태로 본작업 실행 허용", value=False)
 
     batch_size_confirmed = True
     if work_mode == "production" and limit > 1000:
-        st.sidebar.warning("한 번에 1,000건을 초과했습니다. 배치 분할을 권장합니다.")
+        st.sidebar.warning("한 번에 1,000건을 초과했습니다.")
         batch_size_confirmed = st.sidebar.checkbox("1,000건 초과 실행을 확인", value=False)
 
     default_prefix = make_default_prefix(work_mode, source, split, start, limit)
     output_prefix = st.sidebar.text_input("출력 파일 접두어", value=default_prefix)
-
-    st.sidebar.divider()
-    if os.getenv("OPENAI_API_KEY") and os.getenv("OPENAI_API_KEY") != "your_openai_api_key_here":
-        st.sidebar.success("OPENAI_API_KEY 확인됨")
-    else:
-        st.sidebar.warning("OPENAI_API_KEY가 없습니다. 로컬 .env 파일을 확인하세요.")
+    api_key_exists = bool(os.getenv("OPENAI_API_KEY") and os.getenv("OPENAI_API_KEY") != "your_openai_api_key_here")
+    st.sidebar.success("OPENAI_API_KEY 확인됨") if api_key_exists else st.sidebar.warning("OPENAI_API_KEY가 없습니다.")
 
     return {
-        "dataset_root": dataset_root,
-        "work_mode": work_mode,
-        "source": source,
-        "split": split,
-        "start": start,
-        "limit": limit,
-        "error_types": error_types,
-        "selection_mode": selection_mode,
-        "exclude_reviewed": exclude_reviewed,
-        "model": model,
-        "prompt": prompt,
-        "confidence": confidence,
-        "resume": resume,
-        "retry_failed": retry_failed,
-        "retry_errors_only": retry_errors_only,
-        "max_attempts": max_attempts,
-        "backoff": backoff,
-        "input_price": input_price,
-        "output_price": output_price,
-        "cost_limit": cost_limit,
-        "output_prefix": output_prefix.strip() or default_prefix,
-        "api_key_exists": bool(os.getenv("OPENAI_API_KEY") and os.getenv("OPENAI_API_KEY") != "your_openai_api_key_here"),
-        "allow_unpriced": allow_unpriced,
-        "batch_size_confirmed": batch_size_confirmed,
+        "dataset_root": dataset_root, "work_mode": work_mode, "source": source, "split": split,
+        "start": start, "limit": limit, "error_types": error_types, "selection_mode": selection_mode,
+        "exclude_reviewed": exclude_reviewed, "model": model, "prompt": prompt, "confidence": confidence,
+        "resume": resume, "retry_failed": retry_failed, "retry_errors_only": retry_errors_only,
+        "max_attempts": max_attempts, "backoff": backoff, "input_price": input_price,
+        "output_price": output_price, "cost_limit": cost_limit,
+        "output_prefix": output_prefix.strip() or default_prefix, "api_key_exists": api_key_exists,
+        "allow_unpriced": allow_unpriced, "batch_size_confirmed": batch_size_confirmed,
     }
 
 
 def main() -> None:
     settings = render_settings()
     st.title("1. OpenAI 자동판정")
-    st.caption("데이터 인덱스 → GPT 자동판정 → 기존 라벨 비교 → 우선순위 검수 목록")
+    st.caption("데이터 인덱스 → 고정 work plan → GPT 자동판정 → 기존 라벨 비교 → 우선순위 검수 목록")
 
     reviewed_total, reviewed_split = reviewed_counts()
-    llm_all = production_openai_results()
-    llm_count = len(llm_all)
+    success_rows, failed_rows = successful_openai_results(OUTPUTS_DIR / "llm_results")
+    success_count = len(success_rows)
+    failed_count = len(failed_rows)
     goal = openai_target_total()
-    llm_errors = 0
-    if not llm_all.empty and "error" in llm_all.columns:
-        llm_errors = int(llm_all["error"].fillna("").astype(str).str.strip().ne("").sum())
-
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("OpenAI 본작업 완료", f"{llm_count:,} / {goal:,}")
+    c1.metric("OpenAI 성공", f"{success_count:,} / {goal:,}")
     c2.metric("사람 검수 완료", reviewed_total)
-    c3.metric("OpenAI 목표까지 남음", max(goal - llm_count, 0))
-    c4.metric("현재 OpenAI 오류", llm_errors)
-    st.progress(min(llm_count / goal, 1.0), text=f"OpenAI 본작업 진행률 {llm_count:,}/{goal:,} ({min(llm_count / goal, 1.0):.1%})")
-    st.caption(f"사람 검수는 3,000건 전체가 아니라 자동 선별된 후보만 진행합니다. split별 사람 검수: train {reviewed_split['train']} / val {reviewed_split['val']} / test {reviewed_split['test']}")
+    c3.metric("성공 목표까지 남음", max(goal - success_count, 0))
+    c4.metric("미해결 API 오류", failed_count)
+    st.progress(min(success_count / goal, 1.0), text=f"OpenAI 성공 진행률 {success_count:,}/{goal:,} ({min(success_count / goal, 1.0):.1%})")
+    st.caption(f"사람 검수는 자동 선별 후보만 진행합니다. train {reviewed_split['train']} / val {reviewed_split['val']} / test {reviewed_split['test']}")
 
     index_path = OUTPUTS_DIR / "dataset_index.csv"
+    work_plan_path = OUTPUTS_DIR / "work_plan_3000.csv"
+    production_mode = str(settings["work_mode"]) == "production"
+    execution_input = work_plan_path if production_mode else index_path
     llm_path = OUTPUTS_DIR / "llm_results" / f"{settings['output_prefix']}.csv"
     compare_path = OUTPUTS_DIR / "compare_results" / f"{settings['output_prefix']}_compare.csv"
     review_path = OUTPUTS_DIR / "review_lists" / f"{settings['output_prefix']}_review.csv"
@@ -290,14 +242,19 @@ def main() -> None:
                 st.dataframe(report.head(200), use_container_width=True)
     show_summary(index_path)
 
-    st.markdown("## 2) OpenAI 자동판정")
-    next_start = int(settings["start"]) + int(settings["limit"])
-    st.caption(f"현재 Batch: `{settings['output_prefix']}` · 다음 순차 Batch 시작번호 제안: `{next_start}`")
+    if production_mode:
+        if work_plan_path.exists():
+            st.success(f"본작업 대상 고정: {work_plan_path.name} · 이후 실행은 이 파일에 있는 샘플만 사용합니다.")
+        else:
+            st.error("본작업 work_plan_3000.csv가 없습니다. 8. 본작업 관리에서 먼저 생성하세요.")
+        if settings["source"] != "errors" or settings["split"] not in {"train", "val", "test"}:
+            st.warning("3,000건 본작업은 errors + train/val/test 중 하나를 선택하세요.")
 
+    st.markdown("## 2) OpenAI 자동판정")
+    st.caption(f"현재 Batch: `{settings['output_prefix']}`")
     if llm_path.exists():
         existing = read_csv_safe(llm_path)
         st.warning(f"동일한 결과 파일이 이미 있습니다: {llm_path.name} / {0 if existing is None else len(existing)}행")
-        st.caption("`중단된 결과 이어서 처리`가 켜져 있으면 성공한 항목은 자동 Skip하고 미처리/실패 항목만 처리합니다.")
 
     overwrite_confirm = True
     if llm_path.exists() and not bool(settings["resume"]) and not bool(settings["retry_errors_only"]):
@@ -325,48 +282,51 @@ def main() -> None:
             c2.metric("입력/출력 토큰", f"{int(state.get('input_tokens', 0) or 0):,} / {int(state.get('output_tokens', 0) or 0):,}")
         image_id = str(state.get("image_id", "") or "")
         stop_reason = str(state.get("stop_reason", "") or "")
-        if stop_reason:
-            current_box.warning(f"중지 사유: {stop_reason}")
-        elif image_id:
-            current_box.info(f"최근 처리: `{image_id}`")
+        current_box.warning(f"중지 사유: {stop_reason}") if stop_reason else (current_box.info(f"최근 처리: `{image_id}`") if image_id else None)
 
+    plan_ready = (not production_mode) or work_plan_path.exists()
+    production_scope_ok = (not production_mode) or (settings["source"] == "errors" and settings["split"] in {"train", "val", "test"})
     run_disabled = (
-        (not bool(settings["api_key_exists"]))
-        or (not index_path.exists())
-        or (not overwrite_confirm)
-        or (not bool(settings["allow_unpriced"]))
-        or (not bool(settings["batch_size_confirmed"]))
+        (not bool(settings["api_key_exists"])) or (not execution_input.exists()) or (not overwrite_confirm)
+        or (not bool(settings["allow_unpriced"])) or (not bool(settings["batch_size_confirmed"]))
+        or (not plan_ready) or (not production_scope_ok)
     )
+
     if st.button("OpenAI 실행 / 이어서 처리", type="primary", use_container_width=True, disabled=run_disabled):
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        batch_id = str(settings["output_prefix"])
+        manifest = build_manifest(
+            project_root=PROJECT_ROOT,
+            batch_id=batch_id,
+            model=str(settings["model"]),
+            prompt_path=prompt_path,
+            index_path=index_path,
+            work_plan_path=work_plan_path if production_mode else None,
+            settings={
+                "work_mode": settings["work_mode"], "source": settings["source"], "split": settings["split"],
+                "start": settings["start"], "limit": settings["limit"], "confidence": settings["confidence"],
+                "selection_mode": settings["selection_mode"], "input_price": settings["input_price"],
+                "output_price": settings["output_price"], "cost_limit": settings["cost_limit"],
+            },
+        )
+        write_manifest(OUTPUTS_DIR / "run_manifests" / f"{batch_id}.json", manifest)
         try:
             result = run_llm(
-                input_csv=index_path,
+                input_csv=execution_input,
                 prompt_path=prompt_path,
                 output_csv=llm_path,
-                source=str(settings["source"]),
-                split=str(settings["split"]),
-                start=int(settings["start"]),
-                limit=int(settings["limit"]),
-                model=str(settings["model"]),
-                progress_callback=progress_callback,
-                resume=bool(settings["resume"]),
-                retry_failed=bool(settings["retry_failed"]),
-                retry_errors_only=bool(settings["retry_errors_only"]),
-                max_attempts=int(settings["max_attempts"]),
-                retry_backoff_seconds=float(settings["backoff"]),
-                checkpoint_path=checkpoint_path,
-                run_id=run_id,
-                batch_id=str(settings["output_prefix"]),
-                work_mode=str(settings["work_mode"]),
-                error_types=list(settings["error_types"]),
-                selection_mode=str(settings["selection_mode"]),
+                source=str(settings["source"]), split=str(settings["split"]), start=int(settings["start"]), limit=int(settings["limit"]),
+                model=str(settings["model"]), progress_callback=progress_callback, resume=bool(settings["resume"]),
+                retry_failed=bool(settings["retry_failed"]), retry_errors_only=bool(settings["retry_errors_only"]),
+                max_attempts=int(settings["max_attempts"]), retry_backoff_seconds=float(settings["backoff"]),
+                checkpoint_path=checkpoint_path, run_id=run_id, batch_id=batch_id, work_mode=str(settings["work_mode"]),
+                error_types=list(settings["error_types"]), selection_mode=str(settings["selection_mode"]),
                 exclude_reviewed_root=(OUTPUTS_DIR / "reviewed_json") if settings["exclude_reviewed"] else None,
-                input_price_per_million=float(settings["input_price"]),
-                output_price_per_million=float(settings["output_price"]),
+                input_price_per_million=float(settings["input_price"]), output_price_per_million=float(settings["output_price"]),
                 cost_limit_usd=float(settings["cost_limit"]),
             )
             st.success(f"결과 저장 완료: {llm_path.name} / 현재 {len(result):,}행")
+            st.caption(f"run manifest: outputs/run_manifests/{batch_id}.json")
         except Exception as exc:
             st.error(str(exc))
     show_csv_preview(llm_path, "OpenAI 결과")
@@ -388,9 +348,7 @@ def main() -> None:
             review_df = make_review_list(compare_path, review_path)
             st.success(f"검수 목록 생성 완료: {len(review_df):,}건 · priority_score 높은 순")
     show_csv_preview(review_path, "검수 대상 목록")
-
-    st.markdown("## 다음 단계")
-    st.info("검수 목록이 만들어지면 **2. 사람 검수**에서 LLM 검수 대상 CSV 모드로 불러오세요. 본작업 결과 CSV와 reviewed_json은 이제 삭제하지 않는 것을 권장합니다.")
+    st.info("검수 목록이 만들어지면 2. 사람 검수에서 불러오세요. 본작업 결과는 삭제하지 말고 5번 화면에서 백업하세요.")
 
 
 if __name__ == "__main__":
