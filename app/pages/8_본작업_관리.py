@@ -89,17 +89,21 @@ st.markdown("## 3) Final 준비상태")
 gate = final_gate_summary(OUTPUTS_DIR, openai_target_total())
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("OpenAI 성공", f"{gate['success_count']:,}/{gate['target_total']:,}")
-c2.metric("Compare coverage", f"{gate['compare_count']:,}/{gate['target_total']:,}")
-c3.metric("Review 판정 coverage", f"{gate['review_decision_count']:,}/{gate['target_total']:,}")
+c2.metric("Fresh Compare", f"{gate['compare_count']:,}/{gate['target_total']:,}")
+c3.metric("Review 판정", f"{gate['review_decision_count']:,}/{gate['target_total']:,}")
 c4.metric("Final Gate", "READY" if gate["ready"] else "BLOCK")
 c5, c6, c7, c8 = st.columns(4)
 c5.metric("미해결 API 오류", gate["failed_count"])
 c6.metric("미검수/보류", gate["pending_review_count"])
-c7.metric("Coverage 누락", gate["compare_missing"] + gate["review_decision_missing"])
+c7.metric("Review-list 누락", gate.get("review_list_missing", 0))
 c8.metric("Plan Binding", "OK" if gate["plan_binding_ready"] else "BLOCK")
+c9, c10, c11 = st.columns(3)
+c9.metric("Stale Compare", gate.get("stale_compare_count", 0))
+c10.metric("검수 필요 후보", gate.get("review_required_count", 0))
+c11.metric("Review-list 포함", gate.get("review_list_count", 0))
 
 if gate["ready"]:
-    st.success("OpenAI 성공, Compare 100%, Review 판정 100%, API 오류 0, 사람 검수 완료, Plan Binding 조건을 모두 만족합니다.")
+    st.success("OpenAI 성공, 최신 Compare 100%, Review 판정 100%, 필요한 검수목록 생성, API 오류 0, 사람 검수 완료, Plan Binding 조건을 모두 만족합니다.")
 else:
     reasons = []
     if not gate["work_plan_present"]:
@@ -111,9 +115,13 @@ else:
     if gate["failed_count"]:
         reasons.append(f"API 오류 {gate['failed_count']}건")
     if gate["compare_missing"]:
-        reasons.append(f"Compare {gate['compare_missing']}건 미처리")
+        reasons.append(f"최신 Compare {gate['compare_missing']}건 미처리")
+    if gate.get("stale_compare_count", 0):
+        reasons.append(f"Stale Compare {gate['stale_compare_count']}건")
     if gate["review_decision_missing"]:
         reasons.append(f"Review 판정 {gate['review_decision_missing']}건 미처리")
+    if gate.get("review_list_missing", 0):
+        reasons.append(f"검수 목록 {gate['review_list_missing']}건 누락")
     if gate["pending_review_count"]:
         reasons.append(f"사람 검수 {gate['pending_review_count']}건 미완료")
     st.warning("Final BLOCK: " + (" / ".join(reasons) if reasons else "미완료 조건이 있습니다."))
