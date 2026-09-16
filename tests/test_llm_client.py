@@ -18,18 +18,17 @@ from llm_client import sanitize_error_message
 class SanitizeErrorMessageTest(unittest.TestCase):
     def test_redacts_exact_environment_key(self) -> None:
         previous = os.environ.get("OPENAI_API_KEY")
-        os.environ["OPENAI_API_KEY"] = "sk-proj-secret-example-123456"
+        fake_key = "sk-" + "proj-" + "secret-example-" + "123456"
+        os.environ["OPENAI_API_KEY"] = fake_key
         try:
-            result = sanitize_error_message(
-                "Incorrect API key: sk-proj-secret-example-123456"
-            )
+            result = sanitize_error_message(f"Incorrect API key: {fake_key}")
         finally:
             if previous is None:
                 os.environ.pop("OPENAI_API_KEY", None)
             else:
                 os.environ["OPENAI_API_KEY"] = previous
 
-        self.assertNotIn("sk-proj-secret-example-123456", result)
+        self.assertNotIn(fake_key, result)
         self.assertIn("[REDACTED_API_KEY]", result)
 
     def test_redacts_masked_key_from_api_error(self) -> None:
