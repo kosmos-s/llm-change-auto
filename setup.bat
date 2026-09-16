@@ -36,8 +36,13 @@ echo [2/5] pip 업데이트...
 python -m pip install --upgrade pip
 if errorlevel 1 goto :fail
 
-echo [3/5] requirements 설치...
-pip install -r requirements.txt
+echo [3/5] Python 패키지 설치...
+if exist "requirements-lock.txt" (
+  echo 재현 가능한 고정 버전 requirements-lock.txt 사용
+  pip install -r requirements-lock.txt
+) else (
+  pip install -r requirements.txt
+)
 if errorlevel 1 goto :fail
 
 if not exist ".env" (
@@ -55,8 +60,10 @@ for %%D in (
   "outputs\review_events"
   "outputs\review_history"
   "outputs\backups\reviewed_json"
+  "outputs\backups\project_outputs"
   "outputs\quality"
   "outputs\clean_datasets"
+  "outputs\model_eval"
   "logs"
 ) do (
   if not exist "%%~D" mkdir "%%~D" >nul 2>nul
@@ -84,11 +91,12 @@ if exist "!DEFAULT_DATASET!" (
       if exist "!DEFAULT_DATASET!" (
         echo [OK] 데이터 폴더 연결 완료
       ) else (
-        echo [WARN] 폴더 연결에 실패했습니다. UI에서 데이터 경로를 직접 지정하세요.
+        echo [WARN] 폴더 연결에 실패했습니다.
+        echo .env의 DATASET_ROOT 또는 UI에서 실제 경로를 지정하세요.
       )
     )
   ) else (
-    echo [INFO] 데이터 경로 설정을 건너뜁니다. UI에서 직접 지정할 수 있습니다.
+    echo [INFO] 데이터 경로 설정을 건너뜁니다. .env 또는 UI에서 직접 지정할 수 있습니다.
   )
 )
 
@@ -96,7 +104,8 @@ echo.
 echo ================================================
 echo 설치 완료
 echo 1. 메모장에서 .env를 열어 OPENAI_API_KEY를 입력하세요.
-echo 2. 이후 run.bat을 실행하세요.
+echo 2. 데이터가 기본 경로가 아니면 DATASET_ROOT도 입력할 수 있습니다.
+echo 3. 이후 run.bat을 실행하세요.
 echo ================================================
 echo.
 
