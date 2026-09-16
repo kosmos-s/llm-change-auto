@@ -57,10 +57,13 @@ def ensure_output_dirs(project_root: Path) -> Path:
         "review_events",
         "review_history",
         "backups/reviewed_json",
+        "backups/reviewed_json_merge",
         "backups/project_outputs",
         "quality",
         "clean_datasets",
         "model_eval",
+        "review_packages",
+        "run_manifests",
     ]:
         (root / relative).mkdir(parents=True, exist_ok=True)
     return root

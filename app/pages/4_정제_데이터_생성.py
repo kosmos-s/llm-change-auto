@@ -18,13 +18,14 @@ if str(SRC_DIR) not in sys.path:
 from data_quality import summarize_quality, validate_index
 from export_clean_dataset import build_clean_manifest
 from make_quality_review_list import make_quality_review_list
-from project_paths import dataset_root_default, ensure_output_dirs
+from production_gate import final_gate_summary
+from project_paths import dataset_root_default, ensure_output_dirs, openai_target_total
 from quality_actions import build_quality_action_plan, build_split_leakage_details
 
 OUTPUTS_DIR = ensure_output_dirs(PROJECT_ROOT)
 
 st.title("4. 정제 데이터 생성")
-st.caption("Export 전에 데이터 무결성을 검사하고 clean_v1 / clean_v2 / final 같은 버전으로 snapshot을 생성합니다.")
+st.caption("Export 전에 데이터 무결성, OpenAI 성공 목표, 미검수/보류 상태를 확인하고 버전 snapshot을 생성합니다.")
 
 index_csv = Path(st.text_input("dataset_index.csv", value=str(OUTPUTS_DIR / "dataset_index.csv")))
 reviewed_root = Path(st.text_input("reviewed_json 폴더", value=str(OUTPUTS_DIR / "reviewed_json")))
@@ -40,10 +41,17 @@ summary_json = version_root / "snapshot_summary.json"
 copy_json = st.checkbox("선택된 JSON을 version snapshot에 실제 복사", value=True, help="이미지는 복사하지 않고 manifest가 원본 이미지 경로를 유지합니다.")
 block_on_errors = st.checkbox("무결성 error가 있으면 Export 차단", value=True)
 final_version = version.strip().lower() in {"final", "final_3000"} or version.strip().lower().startswith("final_")
-if final_version:
-    st.info("final 버전은 무결성 Error가 1건이라도 있으면 강제로 Export가 차단됩니다.")
+production_gate = final_gate_summary(OUTPUTS_DIR, openai_target_total())
 
-st.info("reviewed_json이 있으면 사람 확정본을 사용하고, 없으면 원본 JSON을 사용합니다. 원본 항공영상은 수정하지 않습니다.")
+if final_version:
+    st.info("final 버전은 무결성 Error=0, OpenAI 성공 목표 달성, API 오류=0, 미검수/보류=0을 모두 만족해야 생성됩니다.")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("OpenAI 성공", f"{production_gate['success_count']}/{production_gate['target_total']}")
+    c2.metric("API 오류", production_gate["failed_count"])
+    c3.metric("미검수/보류", production_gate["pending_review_count"])
+    c4.metric("Production Gate", "READY" if production_gate["ready"] else "BLOCK")
+
+st.info("reviewed_json이 있으면 사람 확정본을 사용하고, 없으면 원본 JSON을 사용합니다. 단 final 버전에서는 미검수 후보가 남아 있으면 Export를 막습니다.")
 
 quality_report: pd.DataFrame | None = None
 if st.button("1) Export 전 품질검사", type="primary", use_container_width=True):
@@ -76,7 +84,6 @@ if st.button("1) Export 전 품질검사", type="primary", use_container_width=T
                 file_name=f"{version}_quality_action_plan.csv",
                 mime="text/csv",
             )
-            st.caption("split_leakage, Artifact 논리경고, orphan 등은 원본을 자동 삭제하지 않고 사람이 확인하도록 설계했습니다.")
     except Exception as exc:
         st.error(str(exc))
 
@@ -103,7 +110,7 @@ if saved_quality is not None and not saved_quality.empty and "code" in saved_qua
             leakage_details = pd.DataFrame()
         if not leakage_details.empty:
             st.markdown("### split leakage 실제 경로")
-            st.error("아래 항목은 같은 group 내부에서 여러 split에 존재합니다. 자동 삭제하지 말고 어느 split에 유지할지 결정한 뒤 원본 분할을 정리하세요.")
+            st.error("같은 group 내부에서 여러 split에 존재합니다. 자동 삭제하지 말고 유지할 split을 결정해 원본 분할을 정리하세요.")
             st.dataframe(leakage_details, use_container_width=True, hide_index=True)
             st.download_button(
                 "split leakage 상세 CSV 다운로드",
@@ -121,15 +128,24 @@ if saved_quality is not None and not saved_quality.empty and "code" in saved_qua
         try:
             review_df = make_quality_review_list(index_csv, quality_csv, quality_review_path, selected_codes)
             st.success(f"품질 검수 목록 생성 완료: {len(review_df)}건 → {quality_review_path.name}")
-            st.info("2. 사람 검수에서 LLM 검수 대상 CSV 모드로 이 파일을 불러오면 동일한 검수 UI에서 처리할 수 있습니다.")
+            st.info("2. 사람 검수에서 이 CSV를 불러와 처리하세요.")
         except Exception as exc:
             st.error(str(exc))
 
-export_blocked = bool((block_on_errors or final_version) and quality_errors is not None and quality_errors > 0)
+quality_blocked = bool((block_on_errors or final_version) and quality_errors is not None and quality_errors > 0)
+production_blocked = bool(final_version and not production_gate["ready"])
+export_blocked = quality_blocked or production_blocked
+
+if production_blocked:
+    st.error("Final Production Gate가 BLOCK 상태입니다. 8. 본작업 관리에서 미완료 항목을 확인하세요.")
+
 if st.button("2) 버전 Snapshot 생성", type="primary", use_container_width=True, disabled=export_blocked):
     try:
         if (block_on_errors or final_version) and not quality_csv.exists():
-            st.warning("먼저 품질검사를 실행하세요. 현재 설정은 품질검사 결과가 있어야 안전하게 Export합니다.")
+            st.warning("먼저 품질검사를 실행하세요.")
+            st.stop()
+        if final_version and not production_gate["ready"]:
+            st.error("Final Production Gate 조건을 만족하지 않습니다.")
             st.stop()
         with st.spinner("정제 데이터 snapshot 생성 중..."):
             result = build_clean_manifest(
@@ -150,6 +166,7 @@ if st.button("2) 버전 Snapshot 생성", type="primary", use_container_width=Tr
             "original_samples": original_count,
             "reviewed_ratio": reviewed_count / len(result) if len(result) else 0.0,
             "quality_errors": int(quality_errors or 0),
+            "production_gate": production_gate,
             "quality_report": str(quality_csv),
             "quality_action_plan": str(action_csv),
             "copy_selected_json": bool(copy_json),
@@ -162,10 +179,8 @@ if st.button("2) 버전 Snapshot 생성", type="primary", use_container_width=Tr
         c2.metric("사람 검수본", reviewed_count)
         c3.metric("원본 사용", original_count)
         if not result.empty:
-            st.markdown("### source / split / label_source")
             summary = result.groupby(["source", "split", "label_source"], dropna=False).size().reset_index(name="count")
             st.dataframe(summary, use_container_width=True, hide_index=True)
-            st.markdown("### manifest 미리보기")
             st.dataframe(result.head(100), use_container_width=True)
     except Exception as exc:
         st.error(str(exc))
