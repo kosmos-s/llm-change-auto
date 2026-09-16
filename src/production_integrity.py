@@ -120,6 +120,22 @@ def validate_plan_binding(index_path: Path, work_plan_path: Path) -> dict[str, A
     }
 
 
+def _normalized_setting(key: str, value: Any) -> Any:
+    """Normalize settings whose representation can vary without changing meaning."""
+    if key == "error_types":
+        if value is None:
+            return []
+        if isinstance(value, (list, tuple, set)):
+            return sorted(str(item).strip() for item in value if str(item).strip())
+        text = str(value).strip()
+        return [text] if text else []
+    if key == "exclude_reviewed":
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"true", "1", "yes", "y", "o"}
+    return value
+
+
 def run_manifest_compatible(existing: dict[str, Any], current: dict[str, Any]) -> tuple[bool, list[str]]:
     """Return whether an existing batch may be safely resumed with current settings."""
     checks = {
@@ -132,9 +148,12 @@ def run_manifest_compatible(existing: dict[str, Any], current: dict[str, Any]) -
     new_settings = current.get("settings") if isinstance(current.get("settings"), dict) else {}
     for key in [
         "work_mode", "source", "split", "start", "limit", "selection_mode", "confidence",
-        "input_price", "output_price",
+        "error_types", "exclude_reviewed", "input_price", "output_price",
     ]:
-        checks[f"settings.{key}"] = (old_settings.get(key), new_settings.get(key))
+        checks[f"settings.{key}"] = (
+            _normalized_setting(key, old_settings.get(key)),
+            _normalized_setting(key, new_settings.get(key)),
+        )
 
-    mismatches = [name for name, (old, new) in checks.items() if str(old) != str(new)]
+    mismatches = [name for name, (old, new) in checks.items() if old != new]
     return not mismatches, mismatches
