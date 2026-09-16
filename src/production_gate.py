@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from pipeline_coverage import pipeline_coverage
+from pipeline_coverage import current_required_review_rows, pipeline_coverage
 from production_integrity import validate_plan_binding
 from results_inventory import unique_openai_results
 from work_plan import logical_key_frame
@@ -46,17 +46,12 @@ def successful_openai_results(results_dir: Path, work_plan_path: Path | None = N
         work_plan_path = _default_plan_for_results(results_dir)
     frozen_plan = work_plan_path is not None and work_plan_path.exists()
     all_rows = _filter_to_work_plan(unique_openai_results(results_dir), work_plan_path)
-
-    # Once a production plan is frozen, only rows explicitly created in production
-    # mode may count. Legacy/pilot rows without work_mode and explicit test rows are
-    # ignored even if they happen to share the same logical sample key.
     if frozen_plan and not all_rows.empty:
         if "work_mode" not in all_rows.columns:
             all_rows = all_rows.iloc[0:0].copy()
         else:
             mode = all_rows["work_mode"].fillna("").astype(str).str.strip().str.lower()
             all_rows = all_rows[mode.isin(PRODUCTION_MODES)].copy().reset_index(drop=True)
-
     if all_rows.empty:
         return all_rows.copy(), all_rows.copy()
     if "error" not in all_rows.columns:
@@ -106,7 +101,7 @@ def reviewed_json_keys(reviewed_root: Path) -> set[str]:
     return keys
 
 
-def unresolved_review_items(review_lists_dir: Path, reviewed_root: Path, event_csv: Path, work_plan_path: Path | None = None) -> pd.DataFrame:
+def _legacy_review_candidates(review_lists_dir: Path) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
     if review_lists_dir.exists():
         for path in sorted(review_lists_dir.glob("*.csv")):
@@ -116,19 +111,32 @@ def unresolved_review_items(review_lists_dir: Path, reviewed_root: Path, event_c
                 continue
             if frame.empty or "image_id" not in frame.columns:
                 continue
-            if "work_mode" in frame.columns:
-                mode = frame["work_mode"].fillna("").astype(str).str.strip().str.lower()
-                frame = frame[mode.isin(PRODUCTION_MODES)].copy()
-            elif work_plan_path is not None:
-                continue
             if "review_required_final" in frame.columns:
                 frame = frame[frame["review_required_final"].fillna("").astype(str).str.lower().isin(TRUE_VALUES)].copy()
             frame["_review_list"] = path.name
             frames.append(frame)
-    if not frames:
-        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
 
-    all_items = pd.concat(frames, ignore_index=True, sort=False)
+
+def unresolved_review_items(review_lists_dir: Path, reviewed_root: Path, event_csv: Path, work_plan_path: Path | None = None) -> pd.DataFrame:
+    """Return current human-review requirements that do not yet have reviewed JSON.
+
+    With a frozen production plan, requirements come from the current *fresh compare*
+    decisions, not from potentially stale review-list CSVs. Review-list generation is
+    checked separately by `pipeline_coverage`.
+    """
+    if work_plan_path is not None and work_plan_path.exists():
+        outputs_dir = review_lists_dir.parent
+        all_items = current_required_review_rows(outputs_dir, work_plan_path)
+        if all_items.empty:
+            return pd.DataFrame()
+        all_items = all_items.copy()
+        all_items["_review_list"] = "current_compare_decision"
+    else:
+        all_items = _legacy_review_candidates(review_lists_dir)
+        if all_items.empty:
+            return pd.DataFrame()
+
     for col, default in [("group", ""), ("source", ""), ("split", ""), ("relative_folder", "."), ("image_id", "")]:
         if col not in all_items.columns:
             all_items[col] = default
@@ -163,7 +171,11 @@ def final_gate_summary(outputs_dir: Path, target_total: int) -> dict[str, object
     coverage = pipeline_coverage(outputs_dir, work_plan_path) if work_plan_path.exists() else {
         "target": effective_target,
         "compare_count": 0,
+        "stale_compare_count": 0,
         "review_decision_count": 0,
+        "review_required_count": 0,
+        "review_list_count": 0,
+        "review_list_missing": 0,
         "compare_missing": effective_target,
         "review_decision_missing": effective_target,
         "ready": False,
@@ -174,9 +186,13 @@ def final_gate_summary(outputs_dir: Path, target_total: int) -> dict[str, object
         "failed_count": len(failed),
         "missing_success": max(effective_target - len(success), 0),
         "compare_count": int(coverage["compare_count"]),
+        "stale_compare_count": int(coverage.get("stale_compare_count", 0)),
         "compare_missing": int(coverage["compare_missing"]),
         "review_decision_count": int(coverage["review_decision_count"]),
         "review_decision_missing": int(coverage["review_decision_missing"]),
+        "review_required_count": int(coverage.get("review_required_count", 0)),
+        "review_list_count": int(coverage.get("review_list_count", 0)),
+        "review_list_missing": int(coverage.get("review_list_missing", 0)),
         "pending_review_count": len(pending),
         "deferred_count": int((pending.get("review_state", pd.Series(dtype=str)) == "deferred").sum()) if not pending.empty else 0,
         "work_plan_present": work_plan_path.exists(),
