@@ -30,6 +30,24 @@ class ProductionGateTests(unittest.TestCase):
             self.assertEqual(len(pending), 1)
             self.assertEqual(pending.iloc[0]["review_state"], "unreviewed")
 
+    def test_test_mode_review_list_does_not_block_frozen_production_plan(self):
+        with tempfile.TemporaryDirectory() as temp:
+            outputs = Path(temp)
+            review_lists = outputs / "review_lists"
+            review_lists.mkdir(parents=True)
+            plan = outputs / "work_plan_3000.csv"
+            pd.DataFrame([{
+                "group": "errors", "split": "train", "relative_folder": "a", "image_id": "x1",
+            }]).to_csv(plan, index=False)
+            pd.DataFrame([{
+                "group": "errors", "split": "train", "relative_folder": "a", "image_id": "x1",
+                "review_required_final": True, "work_mode": "test",
+            }]).to_csv(review_lists / "test_review.csv", index=False)
+            pending = unresolved_review_items(
+                review_lists, outputs / "reviewed_json", outputs / "review_events" / "review_events.csv", plan
+            )
+            self.assertTrue(pending.empty)
+
 
 if __name__ == "__main__":
     unittest.main()
