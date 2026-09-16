@@ -1,10 +1,16 @@
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
 import pandas as pd
 
-from src.production_integrity import (
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from production_integrity import (
     run_manifest_compatible,
     validate_plan_binding,
     write_plan_metadata,
