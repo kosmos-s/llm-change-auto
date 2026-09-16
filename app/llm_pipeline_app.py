@@ -35,6 +35,7 @@ st.set_page_config(page_title="OpenAI 자동판정", layout="wide", initial_side
 SOURCE_OPTIONS = ["dataset", "errors", "all"]
 SPLIT_OPTIONS = ["test", "train", "val", "all"]
 PROMPT_OPTIONS = [
+    "prompts/prompt_v5_guideline_20260324.txt",
     "prompts/prompt_v4_quality.txt",
     "prompts/prompt_v3_json_strict.txt",
     "prompts/prompt_v2_guideline.txt",
@@ -127,21 +128,36 @@ def render_settings() -> dict[str, object]:
     st.sidebar.title("OpenAI 자동판정 설정")
     dataset_root = st.sidebar.text_input("데이터 루트 경로", value=str(dataset_root_default(PROJECT_ROOT)))
     work_mode = st.sidebar.radio("작업 모드", ["production", "test"], format_func=lambda v: "본작업" if v == "production" else "테스트", horizontal=True)
-    source = st.sidebar.radio("데이터 종류", SOURCE_OPTIONS, horizontal=True)
-    split = st.sidebar.radio("분할", SPLIT_OPTIONS, horizontal=True)
-    c1, c2 = st.sidebar.columns(2)
-    start = int(c1.number_input("시작 번호", min_value=0, value=0, step=1))
-    limit = int(c2.number_input("개수", min_value=1, value=1000 if work_mode == "production" else 1, step=1))
+
+    if work_mode == "production":
+        source = "errors"
+        st.sidebar.caption("본작업 데이터 종류: errors 고정")
+        split = st.sidebar.radio("분할", ["train", "val", "test"], horizontal=True)
+        start = 0
+        limit = 1000
+        st.sidebar.caption("본작업 범위: 선택한 split의 고정 work plan 1,000건 전체")
+    else:
+        source = st.sidebar.radio("데이터 종류", SOURCE_OPTIONS, horizontal=True)
+        split = st.sidebar.radio("분할", SPLIT_OPTIONS, horizontal=True)
+        c1, c2 = st.sidebar.columns(2)
+        start = int(c1.number_input("시작 번호", min_value=0, value=0, step=1))
+        limit = int(c2.number_input("개수", min_value=1, value=1, step=1))
 
     index_path = OUTPUTS_DIR / "dataset_index.csv"
     index_df = read_csv_safe(index_path)
     error_types: list[str] = []
-    if index_df is not None and source in {"errors", "all"} and "error_type" in index_df.columns:
+    if work_mode != "production" and index_df is not None and source in {"errors", "all"} and "error_type" in index_df.columns:
         options = sorted(v for v in index_df["error_type"].fillna("").astype(str).unique() if v)
         error_types = st.sidebar.multiselect("errors 유형", options, default=[])
 
-    selection_mode = st.sidebar.selectbox("대상 선택 방식", ["sequential", "balanced", "random"], format_func=lambda v: {"sequential": "순차", "balanced": "오류유형 균형", "random": "랜덤"}[v])
-    exclude_reviewed = st.sidebar.checkbox("이미 사람 검수한 항목 제외", value=True)
+    if work_mode == "production":
+        selection_mode = "sequential"
+        exclude_reviewed = False
+        st.sidebar.caption("본작업 대상 선택: 순차 / 기존 검수 여부와 무관하게 work plan 전체 처리")
+    else:
+        selection_mode = st.sidebar.selectbox("대상 선택 방식", ["sequential", "balanced", "random"], format_func=lambda v: {"sequential": "순차", "balanced": "오류유형 균형", "random": "랜덤"}[v])
+        exclude_reviewed = st.sidebar.checkbox("이미 사람 검수한 항목 제외", value=True)
+
     model = st.sidebar.text_input("OpenAI 모델", value="gpt-4o-mini")
     prompt = st.sidebar.selectbox("프롬프트", PROMPT_OPTIONS, index=0)
     confidence = st.sidebar.slider("검수 기준 confidence", 0.0, 1.0, 0.70, 0.05)
@@ -324,7 +340,15 @@ def main() -> None:
         current_box.warning(f"중지 사유: {stop_reason}") if stop_reason else (current_box.info(f"최근 처리: `{image_id}`") if image_id else None)
 
     plan_ready = (not production_mode) or (work_plan_path.exists() and plan_binding_ready)
-    production_scope_ok = (not production_mode) or (settings["source"] == "errors" and settings["split"] in {"train", "val", "test"})
+    production_scope_ok = (not production_mode) or (
+        settings["source"] == "errors"
+        and settings["split"] in {"train", "val", "test"}
+        and int(settings["start"]) == 0
+        and int(settings["limit"]) == 1000
+        and not settings["error_types"]
+        and str(settings["selection_mode"]) == "sequential"
+        and not bool(settings["exclude_reviewed"])
+    )
     run_disabled = (
         (not bool(settings["api_key_exists"])) or (not execution_input.exists()) or (not overwrite_confirm)
         or (not bool(settings["allow_unpriced"])) or (not bool(settings["batch_size_confirmed"]))
