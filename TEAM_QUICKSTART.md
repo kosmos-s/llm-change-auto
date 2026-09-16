@@ -5,10 +5,12 @@
 ## 준비물
 
 - Windows 10/11
-- Python 3.11 이상 권장
+- **Python 3.11**
 - Git
 - OpenAI API Key
 - `dataset_sample` 데이터 폴더
+
+> `setup.bat`과 `requirements-lock.txt`는 재현 가능한 팀 환경을 위해 Python 3.11을 기준으로 고정되어 있습니다.
 
 기본 데이터 구조:
 
@@ -39,13 +41,14 @@ ZIP 다운로드 후 압축을 풀어도 됩니다.
 
 자동으로:
 
-1. `.venv` 생성
-2. `requirements-lock.txt` 고정 버전 설치
-3. `.env.example` → 로컬 `.env` 생성
-4. 필요한 `outputs` 폴더 생성
-5. 기본 데이터 경로 확인
-6. 다른 위치의 데이터면 Junction 연결 시도
-7. 마지막에 `.env`를 메모장으로 열기
+1. Python 3.11 확인
+2. `.venv` 생성
+3. `requirements-lock.txt` 고정 버전 설치
+4. `.env.example` → 로컬 `.env` 생성
+5. 필요한 `outputs` 폴더 생성
+6. 기본 데이터 경로 확인
+7. 다른 위치의 데이터면 Junction 연결 시도
+8. 마지막에 `.env`를 메모장으로 열기
 
 기본 데이터 위치:
 
@@ -181,8 +184,11 @@ git pull
 
 ## 문제가 생겼을 때
 
-### `python`을 찾을 수 없음
-Python 3 설치 시 **Add Python to PATH**를 체크하고 다시 `setup.bat`을 실행합니다.
+### Python 3.11을 찾을 수 없음
+Python **3.11** 설치 시 **Add Python to PATH**를 체크하고 다시 `setup.bat`을 실행합니다.
+
+### 기존 `.venv`가 Python 3.11이 아님
+`.venv` 폴더만 삭제하고 `setup.bat`을 다시 실행합니다. 원본 데이터와 `outputs`는 삭제하지 않습니다.
 
 ### `OPENAI_API_KEY가 없습니다`
 `.env`의 `OPENAI_API_KEY=` 뒤에 실제 키가 들어 있는지 확인하고 앱을 재시작합니다.
