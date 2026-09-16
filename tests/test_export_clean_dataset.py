@@ -33,7 +33,7 @@ class ExportCleanDatasetTest(unittest.TestCase):
             reviewed_json.write_text(json.dumps({"Artifact": "o"}), encoding="utf-8")
 
             index_csv = root / "outputs" / "dataset_index.csv"
-            index_csv.parent.mkdir(parents=True)
+            index_csv.parent.mkdir(parents=True, exist_ok=True)
             pd.DataFrame([
                 {
                     "image_id": "sample",
@@ -78,7 +78,7 @@ class ExportCleanDatasetTest(unittest.TestCase):
             original_json.write_text(json.dumps({"Artifact": "x"}), encoding="utf-8")
 
             index_csv = root / "outputs" / "dataset_index.csv"
-            index_csv.parent.mkdir(parents=True)
+            index_csv.parent.mkdir(parents=True, exist_ok=True)
             pd.DataFrame([
                 {
                     "image_id": "sample",
