@@ -11,6 +11,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from production_integrity import (
+    portable_csv_sha256,
     run_manifest_compatible,
     validate_plan_binding,
     write_plan_metadata,
@@ -32,6 +33,19 @@ class ProductionIntegrityTests(unittest.TestCase):
             check = validate_plan_binding(index, plan)
             self.assertFalse(check["ready"])
             self.assertIn("dataset_index_changed", check["reasons"])
+
+    def test_portable_hash_ignores_pc_specific_paths(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            a = root / "a.csv"
+            b = root / "b.csv"
+            common = {
+                "group": "errors", "split": "train", "relative_folder": "artifact_fp_00",
+                "image_id": "x1", "original_change": 1,
+            }
+            pd.DataFrame([{**common, "image_path": "C:/Users/A/x.jpg", "json_path": "C:/Users/A/x.json"}]).to_csv(a, index=False)
+            pd.DataFrame([{**common, "image_path": "D:/team/x.jpg", "json_path": "D:/team/x.json"}]).to_csv(b, index=False)
+            self.assertEqual(portable_csv_sha256(a), portable_csv_sha256(b))
 
     def test_resume_manifest_rejects_prompt_or_scope_changes(self):
         base = {
