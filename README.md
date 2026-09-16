@@ -72,6 +72,8 @@ OpenAI 성공 목표 3,000
 ## 팀원 여러 PC 검수
 8번 **본작업 관리**에서 검수 결과 ZIP을 생성/가져오기 할 수 있습니다. 패키지에는 reviewed JSON 해시뿐 아니라 **dataset_index SHA256 + work-plan SHA256**도 기록합니다. 현재 PC와 다른 본작업 패키지는 병합 자체가 차단됩니다. ZIP 내부 JSON도 manifest SHA256과 다시 대조한 뒤에만 병합합니다.
 
+팀원 PC도 같은 본작업을 사용하려면 `dataset_index.csv`, `work_plan_3000.csv`, `work_plan_3000.meta.json`이 동일해야 합니다. 가장 안전한 방법은 한 PC에서 계획을 고정한 뒤 5번 백업 또는 별도 안전한 전달 방식으로 이 세 파일을 팀원에게 동일하게 배포하는 것입니다.
+
 같은 샘플의 JSON이 서로 다르면 conflict로 표시하며 사용자가 `내 PC 결과 유지` 또는 `들어온 결과 사용`을 선택합니다. 병합 후 3번 화면에서 `검수 이력 갱신`을 다시 실행합니다.
 
 ## Final Gate
