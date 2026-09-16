@@ -48,6 +48,18 @@ class FinalGateCoverageTests(unittest.TestCase):
             self.assertEqual(summary["pending_review_count"], 0)
             self.assertTrue(summary["ready"])
 
+    def test_legacy_openai_row_without_work_mode_does_not_count(self):
+        with tempfile.TemporaryDirectory() as temp:
+            outputs = Path(temp)
+            row = self._prepare(outputs)
+            legacy = dict(row)
+            legacy.update({"llm_provider": "openai", "error": ""})
+            pd.DataFrame([legacy]).to_csv(outputs / "llm_results" / "prod_openai_x.csv", index=False)
+            summary = final_gate_summary(outputs, 1)
+            self.assertEqual(summary["success_count"], 0)
+            self.assertEqual(summary["missing_success"], 1)
+            self.assertFalse(summary["ready"])
+
 
 if __name__ == "__main__":
     unittest.main()
