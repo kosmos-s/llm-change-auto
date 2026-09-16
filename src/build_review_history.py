@@ -117,7 +117,7 @@ def filter_openai_rows(frame: pd.DataFrame, csv_path: Path) -> pd.DataFrame:
             return frame.iloc[0:0].copy()
 
     filename = csv_path.name.lower()
-    if filename.startswith("openai_") and "gemini" not in filename:
+    if (filename.startswith("openai_") or filename.startswith("prod_openai_")) and "gemini" not in filename:
         result = frame.copy()
         if "llm_provider" not in result.columns:
             result["llm_provider"] = "openai"
@@ -129,11 +129,17 @@ def filter_openai_rows(frame: pd.DataFrame, csv_path: Path) -> pd.DataFrame:
 
 
 def load_latest_llm_rows(results_dir: Path) -> pd.DataFrame:
+    """Load one latest OpenAI row per logical key.
+
+    `processed_at` is the authoritative ordering signal. File mtime is only a
+    fallback/tie-breaker, so copying an older CSV later cannot make it look like
+    the latest inference in review-history statistics.
+    """
     if not results_dir.exists():
         return pd.DataFrame()
 
     frames: list[pd.DataFrame] = []
-    for csv_path in sorted(results_dir.glob("*.csv")):
+    for file_order, csv_path in enumerate(sorted(results_dir.glob("*.csv"))):
         try:
             frame = pd.read_csv(csv_path)
         except Exception:
@@ -144,11 +150,22 @@ def load_latest_llm_rows(results_dir: Path) -> pd.DataFrame:
         frame = filter_openai_rows(frame, csv_path)
         if frame.empty:
             continue
+        if "work_mode" in frame.columns:
+            mode = frame["work_mode"].fillna("").astype(str).str.strip().str.lower()
+            frame = frame[~mode.isin({"test", "테스트"})].copy()
+        if frame.empty:
+            continue
 
         frame = frame.copy()
         frame["_relative_folder"] = frame.apply(row_relative_folder, axis=1)
         frame["_llm_csv"] = str(csv_path)
         frame["_llm_csv_mtime"] = csv_path.stat().st_mtime
+        frame["_llm_file_order"] = file_order
+        frame["_llm_row_order"] = range(len(frame))
+        if "processed_at" in frame.columns:
+            frame["_processed_order"] = pd.to_datetime(frame["processed_at"], errors="coerce")
+        else:
+            frame["_processed_order"] = pd.NaT
         frames.append(frame)
 
     if not frames:
@@ -159,8 +176,12 @@ def load_latest_llm_rows(results_dir: Path) -> pd.DataFrame:
     if not all(col in merged.columns for col in required_key_cols):
         return pd.DataFrame()
 
-    merged = merged.sort_values("_llm_csv_mtime")
-    return merged.drop_duplicates(subset=required_key_cols, keep="last")
+    merged = merged.sort_values(
+        ["_processed_order", "_llm_csv_mtime", "_llm_file_order", "_llm_row_order"],
+        na_position="first",
+        kind="stable",
+    )
+    return merged.drop_duplicates(subset=required_key_cols, keep="last").reset_index(drop=True)
 
 
 def make_lookup_key(source: str, split: str, relative_folder: str, image_id: str) -> tuple[str, str, str, str]:
