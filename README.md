@@ -33,21 +33,20 @@ BACKUP_KEEP_COUNT=10
 ```
 실제 API Key와 데이터/실행결과는 GitHub에 올리지 않습니다.
 
-## 화면 순서
+## 본작업 실제 순서
 ```text
-1. OpenAI 자동판정
-2. 사람 검수
-3. 검수 이력
-4. 정제 데이터 생성
-5. 작업 통계 / 백업
-6. LLM 결과 분석
-7. 모델 성능 비교
-8. 본작업 관리
+1. OpenAI 자동판정에서 dataset_index.csv 생성
+→ 8. 본작업 관리에서 품질검사(Error 0)
+→ 8. 본작업 관리에서 work_plan_3000.csv 고정
+→ 1. OpenAI 자동판정에서 errors/train·val·test 각 1,000건 처리
+→ 각 배치마다 Compare + 검수 목록 생성
+→ 2. 사람 검수 → 3. 검수 이력
+→ 8. 본작업 관리에서 Final Gate 확인
+→ 4. final_3000 품질검사 및 Snapshot 생성
+→ 5~7 통계·LLM 분석·모델 성능 비교
 ```
 
 ## 3,000건 본작업
-본작업 시작 전에 1번에서 `dataset_index.csv`를 생성한 뒤 **8번 화면에서 `work_plan_3000.csv`를 한 번 생성**합니다.
-
 ```text
 errors/train  1,000
 errors/val    1,000
@@ -56,51 +55,49 @@ errors/test   1,000
 OpenAI 성공 목표 3,000
 ```
 
-`work_plan_3000.csv`는 정확히 어떤 샘플을 처리할지 고정합니다. 본작업이 끝날 때까지 다시 만들지 않는 것을 권장합니다. 본작업 OpenAI 실행은 이 plan을 입력으로 사용하므로 dataset index가 이후 바뀌더라도 대상 3,000건은 유지됩니다.
+`work_plan_3000.csv`는 정확한 작업 대상을 고정합니다. 생성 시 `work_plan_3000.meta.json`에 `dataset_index.csv`와 work plan의 SHA256도 함께 기록합니다. 이후 index 또는 plan이 변경되면 **STALE / BLOCK**으로 처리하고 본작업 실행과 Final Gate를 막습니다.
 
 진행률은 결과 행 수가 아니라 **API 오류가 없는 성공 고유 샘플 수**로 계산합니다. 실패 샘플은 3,000건에 포함하지 않습니다.
 
-각 split:
-```text
-OpenAI 실행 / Resume
-→ 비교 실행
-→ 검수 목록 생성
-→ 후보만 사람 검수
-→ 검수 이력 갱신
-→ 작업 통계 / 백업
-```
-
-배치 실행 시 `outputs/run_manifests/<batch>.json`에 Git commit, 프롬프트 SHA256, dataset_index SHA256, work-plan SHA256, 모델과 실행 설정을 기록합니다.
+배치 실행 시 `outputs/run_manifests/<batch>.json`에 Git commit, 프롬프트 SHA256, dataset_index SHA256, work-plan SHA256, 모델과 실행 설정을 기록합니다. 기존 CSV를 Resume/Retry할 때 모델·프롬프트·work plan·index·source·split·start·limit·selection mode·confidence가 기존 manifest와 다르면 실행을 차단합니다. 따라서 하나의 결과 CSV에 서로 다른 실행 조건이 섞이지 않습니다.
 
 ## 사람 검수 안전장치
 - 원본 JSON 직접 덮어쓰기를 UI에서 제거하고 `outputs/reviewed_json/`만 사용
 - 세부 인공물 라벨이 하나라도 켜지면 저장 시 `Artifact`도 자동 활성화
 - `REVIEWER_NAME`을 review event에 기록
 - 가장 최근 review-list CSV를 기본으로 자동 선택
-- `DATASET_ROOT`를 모든 주요 화면의 기본 경로로 사용
+- `DATASET_ROOT`를 주요 화면의 기본 경로로 사용
 - 보류는 완료가 아니며 Final Gate에서 미해결로 계산
 
 ## 팀원 여러 PC 검수
-8번 **본작업 관리**에서 검수 결과 ZIP을 생성/가져오기 할 수 있습니다. reviewed JSON은 해시로 비교하며 같은 샘플의 내용이 다르면 conflict로 표시합니다. 사용자가 `내 PC 결과 유지` 또는 `들어온 결과 사용`을 선택합니다. 들어온 review event도 병합합니다.
+8번 **본작업 관리**에서 검수 결과 ZIP을 생성/가져오기 할 수 있습니다. 패키지에는 reviewed JSON 해시뿐 아니라 **dataset_index SHA256 + work-plan SHA256**도 기록합니다. 현재 PC와 다른 본작업 패키지는 병합 자체가 차단됩니다. ZIP 내부 JSON도 manifest SHA256과 다시 대조한 뒤에만 병합합니다.
 
-병합 후 3번 화면에서 `검수 이력 갱신`을 다시 실행합니다.
+같은 샘플의 JSON이 서로 다르면 conflict로 표시하며 사용자가 `내 PC 결과 유지` 또는 `들어온 결과 사용`을 선택합니다. 병합 후 3번 화면에서 `검수 이력 갱신`을 다시 실행합니다.
 
 ## Final Gate
 `final*` Snapshot은 다음을 모두 만족해야 합니다.
 ```text
 work_plan_3000.csv 존재
+Index ↔ Work plan hash binding 정상
 OpenAI 성공 = plan 전체 완료
 미해결 API 오류 = 0
+Compare coverage = 100%
+Review 판정 coverage = 100%
 미검수/보류 후보 = 0
-데이터 품질 Error = 0
+원본 구조 품질 Error = 0
+Effective JSON Error = 0
 ```
-품질검사는 split leakage, 파일 누락, invalid JSON, Artifact 논리, orphan 등을 검사합니다. 원본을 자동 삭제하지 않습니다.
+
+Compare/Review coverage는 **production 결과만 인정**하므로 과거 test/pilot Compare CSV가 Final 진행률을 채울 수 없습니다.
+
+4번 화면의 Final 품질검사는 원본 JSON만 보는 것이 아니라, 실제 Snapshot에서 선택될 `reviewed_json → original fallback` 결과를 다시 읽어 검사합니다. Snapshot 버튼을 누르는 순간에도 Effective JSON을 재검사하므로 품질검사 후 reviewed JSON이 변경된 경우를 다시 잡습니다.
 
 ## 주요 outputs
 ```text
 outputs/
 ├─ dataset_index.csv
 ├─ work_plan_3000.csv
+├─ work_plan_3000.meta.json
 ├─ llm_results/
 ├─ run_manifests/
 ├─ compare_results/
@@ -114,7 +111,6 @@ outputs/
 ├─ model_eval/
 └─ backups/
 ```
-5번 화면의 ZIP 백업에는 `work_plan_3000.csv`와 run manifests도 포함됩니다.
 
 ## 분석과 최종 모델
 6번은 GPT↔기존 JSON 및 GPT↔사람 확정 라벨 비교용입니다. 여기의 F2는 GPT 분석 지표입니다. 7번은 재학습한 변화탐지 모델의 Precision / Recall / F1 / F2를 기존 모델과 비교하며, 산학과제 목표 F2는 이 화면에서 확인합니다.
