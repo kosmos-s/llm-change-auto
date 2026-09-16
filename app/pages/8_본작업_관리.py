@@ -16,6 +16,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from production_gate import final_gate_summary, unresolved_review_items
+from production_integrity import validate_plan_binding, write_plan_metadata
 from production_readiness import preflight_quality_summary
 from project_paths import dataset_root_default, ensure_output_dirs, openai_target_total
 from team_review_exchange import export_review_package, merge_review_package, preview_review_package
@@ -60,15 +61,24 @@ st.markdown("## 2) 3,000건 작업계획 고정")
 st.info("품질검사를 통과한 뒤 한 번 생성한 work_plan_3000.csv는 3,000건이 끝날 때까지 다시 만들지 마세요.")
 if PLAN.exists():
     plan = load_work_plan(PLAN)
-    c1, c2 = st.columns(2)
+    binding = validate_plan_binding(INDEX, PLAN)
+    c1, c2, c3 = st.columns(3)
     c1.metric("고정 샘플", len(plan))
     c2.metric("work plan SHA256", file_sha256(PLAN)[:16] + "…")
+    c3.metric("Index ↔ Plan 고정", "정상" if binding["ready"] else "STALE / BLOCK")
     st.dataframe(plan.groupby(["group", "split"], dropna=False).size().reset_index(name="count"), use_container_width=True, hide_index=True)
+    if binding["ready"]:
+        st.success("현재 dataset_index와 work plan이 생성 당시 해시와 일치합니다.")
+    else:
+        st.error("작업계획 생성 후 dataset_index 또는 work_plan이 변경되었습니다. 본작업 실행/Final을 중지하세요.")
+        st.code(" / ".join(binding["reasons"]) or "unknown")
+        st.caption("정말 원본 구성이 바뀐 경우에만 기존 본작업 결과를 정리한 뒤 품질검사부터 새로 시작하세요.")
 else:
     st.warning("work_plan_3000.csv가 아직 없습니다.")
     plan_allowed = bool(INDEX.exists() and preflight is not None and preflight.get("ready"))
     if st.button("errors/train·val·test 각 1,000건 작업계획 생성", type="primary", disabled=not plan_allowed, use_container_width=True):
         plan = build_work_plan(INDEX, PLAN, source="errors", split_counts=DEFAULT_SPLIT_COUNTS)
+        write_plan_metadata(INDEX, PLAN)
         st.success(f"고정 완료: {len(plan):,}건 → {PLAN}")
         st.rerun()
     if INDEX.exists() and not plan_allowed:
@@ -82,17 +92,20 @@ c1.metric("OpenAI 성공", f"{gate['success_count']:,}/{gate['target_total']:,}"
 c2.metric("Compare coverage", f"{gate['compare_count']:,}/{gate['target_total']:,}")
 c3.metric("Review 판정 coverage", f"{gate['review_decision_count']:,}/{gate['target_total']:,}")
 c4.metric("Final Gate", "READY" if gate["ready"] else "BLOCK")
-c5, c6, c7 = st.columns(3)
+c5, c6, c7, c8 = st.columns(4)
 c5.metric("미해결 API 오류", gate["failed_count"])
 c6.metric("미검수/보류", gate["pending_review_count"])
 c7.metric("Coverage 누락", gate["compare_missing"] + gate["review_decision_missing"])
+c8.metric("Plan Binding", "OK" if gate["plan_binding_ready"] else "BLOCK")
 
 if gate["ready"]:
-    st.success("OpenAI 성공, Compare 100%, Review 판정 100%, API 오류 0, 사람 검수 완료 조건을 모두 만족합니다.")
+    st.success("OpenAI 성공, Compare 100%, Review 판정 100%, API 오류 0, 사람 검수 완료, Plan Binding 조건을 모두 만족합니다.")
 else:
     reasons = []
     if not gate["work_plan_present"]:
         reasons.append("work plan 없음")
+    if not gate["plan_binding_ready"]:
+        reasons.append("dataset_index/work plan 해시 불일치")
     if gate["missing_success"]:
         reasons.append(f"OpenAI 성공 {gate['missing_success']}건 부족")
     if gate["failed_count"]:
@@ -118,8 +131,11 @@ st.markdown("## 4) 팀원 검수 결과 교환")
 reviewer = os.getenv("REVIEWER_NAME", "").strip()
 reviewer_name = st.text_input("내 검수자 이름", value=reviewer, placeholder="예: 김건보")
 if st.button("내 검수 결과 ZIP 만들기", use_container_width=True):
-    package = export_review_package(OUTPUTS_DIR, reviewer_name)
-    st.success(f"생성 완료: {package}")
+    try:
+        package = export_review_package(OUTPUTS_DIR, reviewer_name)
+        st.success(f"생성 완료: {package}")
+    except Exception as exc:
+        st.error(str(exc))
 
 uploaded = st.file_uploader("팀원이 보낸 review package ZIP", type=["zip"])
 if uploaded is not None:
@@ -132,13 +148,16 @@ if uploaded is not None:
         items = pd.DataFrame(preview["items"])
         if not items.empty:
             st.dataframe(items, use_container_width=True, hide_index=True)
+        if not preview.get("compatible", False):
+            st.error("현재 PC의 dataset_index/work plan과 팀원 패키지가 일치하지 않습니다. 병합할 수 없습니다.")
+            st.code(" / ".join(preview.get("compatibility_errors", [])) or "incompatible")
         conflicts = preview["conflicts"]
         if conflicts:
             st.error(f"충돌 {len(conflicts)}건: 같은 reviewed_json에 서로 다른 내용이 있습니다.")
             policy = st.radio("충돌 처리", ["keep_local", "use_incoming"], format_func=lambda x: "내 PC 결과 유지" if x == "keep_local" else "들어온 결과 사용")
         else:
             policy = "keep_local"
-        if st.button("검수 결과 병합", type="primary", use_container_width=True):
+        if st.button("검수 결과 병합", type="primary", use_container_width=True, disabled=not preview.get("compatible", False)):
             result = merge_review_package(temp, OUTPUTS_DIR, conflict_policy=policy)
             st.success(f"병합 완료: 신규 {result['new']} / 동일 {result['same']} / 충돌 {result['conflict']} / 기록 {result['written']}")
     except Exception as exc:
