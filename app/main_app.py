@@ -1,6 +1,6 @@
 """Unified Streamlit entrypoint.
 
-OpenAI 자동판정 → 사람 검수 → 검수 이력 → 정제 데이터 생성 → 작업 통계 → LLM 결과 분석 → 모델 성능 비교
+OpenAI 자동판정 → 사람 검수 → 검수 이력 → 정제 데이터 생성 → 작업 통계 → LLM 결과 분석 → 모델 성능 비교 → 본작업 관리
 순서로 전체 작업 흐름을 안내한다.
 """
 
@@ -33,24 +33,25 @@ api_key = str(os.getenv("OPENAI_API_KEY", "")).strip()
 api_ready = bool(api_key and api_key != "your_openai_api_key_here")
 dataset_ready = expected_dataset.exists()
 index_ready = (OUTPUTS_DIR / "dataset_index.csv").exists()
+plan_ready = (OUTPUTS_DIR / "work_plan_3000.csv").exists()
 
 st.markdown("## 실행 환경 확인")
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Python 환경", "실행됨")
 c2.metric("OpenAI API Key", "확인됨" if api_ready else "설정 필요")
 c3.metric("데이터 경로", "확인됨" if dataset_ready else "확인 필요")
 c4.metric("dataset_index", "있음" if index_ready else "생성 필요")
+c5.metric("3,000 작업계획", "고정됨" if plan_ready else "생성 필요")
 
 st.caption(f"데이터 경로: {expected_dataset}")
 st.caption(f"OpenAI 본작업 목표: {openai_target_total():,}건")
 
 if not api_ready or not dataset_ready:
-    st.warning(
-        "처음 실행한 PC라면 저장소 루트의 `setup.bat`을 먼저 실행하세요. "
-        "`.env`에 API Key를 넣고, dataset_sample이 다른 위치에 있으면 `.env`의 DATASET_ROOT 또는 1번 화면에서 실제 경로를 지정하세요."
-    )
+    st.warning("처음 실행한 PC라면 `setup.bat`을 먼저 실행하고 `.env`의 API Key와 DATASET_ROOT를 확인하세요.")
+elif not plan_ready:
+    st.info("dataset_index를 만든 뒤 8. 본작업 관리에서 work_plan_3000.csv를 고정하고 본작업을 시작하는 것을 권장합니다.")
 else:
-    st.success("기본 실행 환경이 준비되어 있습니다. 왼쪽 메뉴에서 1번부터 진행하세요.")
+    st.success("기본 실행 환경과 3,000건 작업계획이 준비되어 있습니다.")
 
 with st.expander("팀원용 빠른 실행 순서", expanded=False):
     st.code(
@@ -60,57 +61,29 @@ with st.expander("팀원용 빠른 실행 순서", expanded=False):
         "run.bat     # 이후 실행",
         language="text",
     )
-    st.caption("자세한 내용은 저장소 루트의 TEAM_QUICKSTART.md를 참고하세요.")
 
-st.markdown(
-    """
-## 사용 순서
+st.markdown("## 사용 순서")
+st.write("왼쪽 사이드바에서 **1 → 8 순서**로 진행하세요.")
 
-왼쪽 사이드바의 페이지를 **1 → 7 순서로** 따라가면 됩니다.
+cards = [
+    ("1. OpenAI 자동판정", "데이터 인덱스 생성부터 검수 대상 CSV 생성까지 처리합니다.", "pages/1_OpenAI_자동판정.py", "🤖"),
+    ("2. 사람 검수", "검수 대상 이미지를 직접 보고 최종 라벨을 확정합니다.", "pages/2_사람_검수.py", "✅"),
+    ("3. 검수 이력", "원본·GPT·사람 최종 라벨과 수정 항목을 연결합니다.", "pages/3_검수_이력.py", "📝"),
+    ("4. 정제 데이터 생성", "품질검사 후 clean dataset snapshot을 만듭니다.", "pages/4_정제_데이터_생성.py", "📦"),
+    ("5. 작업 통계", "3,000건 진행률, 사람 검수, 백업 현황을 확인합니다.", "pages/5_작업_통계.py", "📊"),
+    ("6. LLM 결과 분석", "GPT와 기존/사람 확정 라벨 차이를 분석합니다.", "pages/6_LLM_결과_분석.py", "🔎"),
+    ("7. 모델 성능 비교", "기존 모델과 정제 모델의 F2를 비교합니다.", "pages/7_모델_성능_비교.py", "📈"),
+    ("8. 본작업 관리", "작업계획 고정, Final Gate, 팀원 결과 병합을 관리합니다.", "pages/8_본작업_관리.py", "🧭"),
+]
 
-1. **OpenAI 자동판정**: 데이터 인덱스 생성, GPT 자동판별, 기존 라벨 비교, 검수 대상 CSV 생성
-2. **사람 검수**: 검수 대상 이미지를 확인하고 최종 라벨을 `reviewed_json`으로 저장
-3. **검수 이력**: 원본 라벨, OpenAI GPT 결과, 사람 확정 라벨을 연결
-4. **정제 데이터 생성**: 품질검사 후 사람이 검수한 JSON을 우선 적용한 Snapshot 생성
-5. **작업 통계**: OpenAI 3,000건 진행률, 사람 검수, 수정률, 백업 상태 확인
-6. **LLM 결과 분석**: 중복 제거 후 GPT↔원본 / GPT↔사람 확정본을 구분해 분석
-7. **모델 성능 비교**: 기존 모델과 정제 데이터 재학습 모델의 Precision / Recall / F1 / F2 비교
-
-모든 화면은 하나의 Streamlit 앱에서 동작합니다.
-"""
-)
-
-col1, col2, col3 = st.columns(3)
-with col1:
-    st.subheader("1. OpenAI 자동판정")
-    st.write("데이터 인덱스 생성부터 검수 대상 CSV 생성까지 처리합니다.")
-    st.page_link("pages/1_OpenAI_자동판정.py", label="OpenAI 자동판정 열기", icon="🤖")
-with col2:
-    st.subheader("2. 사람 검수")
-    st.write("검수 대상 이미지를 직접 보고 최종 라벨을 확정합니다.")
-    st.page_link("pages/2_사람_검수.py", label="사람 검수 열기", icon="✅")
-with col3:
-    st.subheader("3. 검수 이력")
-    st.write("원본·OpenAI GPT·사람 최종 라벨과 수정 항목을 연결합니다.")
-    st.page_link("pages/3_검수_이력.py", label="검수 이력 열기", icon="📝")
-
-col4, col5, col6 = st.columns(3)
-with col4:
-    st.subheader("4. 정제 데이터 생성")
-    st.write("품질검사 후 clean dataset manifest와 JSON snapshot을 만듭니다.")
-    st.page_link("pages/4_정제_데이터_생성.py", label="정제 데이터 생성", icon="📦")
-with col5:
-    st.subheader("5. 작업 통계")
-    st.write("3,000건 본작업 진행률과 사람 검수 및 백업 현황을 확인합니다.")
-    st.page_link("pages/5_작업_통계.py", label="작업 통계 열기", icon="📊")
-with col6:
-    st.subheader("6. LLM 결과 분석")
-    st.write("GPT와 기존/사람 확정 라벨의 차이를 분석합니다.")
-    st.page_link("pages/6_LLM_결과_분석.py", label="LLM 결과 분석 열기", icon="🔎")
-
-st.subheader("7. 모델 성능 비교")
-st.write("최종 재학습 후 기존 모델과 정제 모델의 F2를 비교합니다.")
-st.page_link("pages/7_모델_성능_비교.py", label="모델 성능 비교 열기", icon="📈")
+for start in range(0, len(cards), 3):
+    columns = st.columns(3)
+    for col, card in zip(columns, cards[start:start + 3]):
+        title, desc, page, icon = card
+        with col:
+            st.subheader(title)
+            st.write(desc)
+            st.page_link(page, label=f"{title} 열기", icon=icon)
 
 st.divider()
-st.info("Windows 팀원은 최초 1회 `setup.bat`, 이후에는 `run.bat`만 실행하면 됩니다. 본작업 중에는 5번 화면의 ZIP 백업도 주기적으로 생성하세요.")
+st.info("Windows 팀원은 최초 1회 `setup.bat`, 이후 `run.bat`을 사용하세요. 본작업 시작 전 8번에서 작업계획을 고정하세요.")
