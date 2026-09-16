@@ -21,9 +21,10 @@ from compare_labels import compare
 from data_quality import summarize_quality, validate_index
 from make_review_list import make_review_list
 from production_gate import successful_openai_results
+from production_integrity import validate_plan_binding
 from project_paths import dataset_root_default, default_cost_limit_usd, ensure_output_dirs, openai_target_total
 from run_llm_labeling import run as run_llm
-from run_manifest import build_manifest, write_manifest
+from run_manifest import build_manifest, validate_resume_manifest, write_manifest
 from scan_dataset import scan_dataset
 
 load_dotenv(PROJECT_ROOT / ".env")
@@ -211,6 +212,7 @@ def main() -> None:
     review_path = OUTPUTS_DIR / "review_lists" / f"{settings['output_prefix']}_review.csv"
     checkpoint_path = llm_path.with_suffix(".checkpoint.json")
     prompt_path = path_from_project(str(settings["prompt"]))
+    manifest_path = OUTPUTS_DIR / "run_manifests" / f"{settings['output_prefix']}.json"
 
     st.markdown("## 1) 데이터 인덱스 / 무결성")
     c1, c2 = st.columns(2)
@@ -219,6 +221,8 @@ def main() -> None:
             root = Path(str(settings["dataset_root"]))
             if not root.exists():
                 st.error(f"데이터 경로가 없습니다: {root}")
+            elif work_plan_path.exists() and production_mode:
+                st.error("본작업 work plan이 이미 고정되어 있습니다. 본작업 중 dataset_index를 재생성하지 마세요.")
             else:
                 with st.spinner("데이터셋 스캔 중..."):
                     df = scan_dataset(root)
@@ -242,10 +246,18 @@ def main() -> None:
                 st.dataframe(report.head(200), use_container_width=True)
     show_summary(index_path)
 
+    plan_binding_ready = True
     if production_mode:
         if work_plan_path.exists():
-            st.success(f"본작업 대상 고정: {work_plan_path.name} · 이후 실행은 이 파일에 있는 샘플만 사용합니다.")
+            binding = validate_plan_binding(index_path, work_plan_path)
+            plan_binding_ready = bool(binding["ready"])
+            if plan_binding_ready:
+                st.success(f"본작업 대상 고정: {work_plan_path.name} · dataset_index/work plan 해시 정상")
+            else:
+                st.error("본작업 계획이 STALE 상태입니다. dataset_index 또는 work plan이 생성 이후 변경되었습니다.")
+                st.code(" / ".join(binding["reasons"]) or "unknown")
         else:
+            plan_binding_ready = False
             st.error("본작업 work_plan_3000.csv가 없습니다. 8. 본작업 관리에서 먼저 생성하세요.")
         if settings["source"] != "errors" or settings["split"] not in {"train", "val", "test"}:
             st.warning("3,000건 본작업은 errors + train/val/test 중 하나를 선택하세요.")
@@ -255,6 +267,30 @@ def main() -> None:
     if llm_path.exists():
         existing = read_csv_safe(llm_path)
         st.warning(f"동일한 결과 파일이 이미 있습니다: {llm_path.name} / {0 if existing is None else len(existing)}행")
+
+    current_manifest = build_manifest(
+        project_root=PROJECT_ROOT,
+        batch_id=str(settings["output_prefix"]),
+        model=str(settings["model"]),
+        prompt_path=prompt_path,
+        index_path=index_path,
+        work_plan_path=work_plan_path if production_mode else None,
+        settings={
+            "work_mode": settings["work_mode"], "source": settings["source"], "split": settings["split"],
+            "start": settings["start"], "limit": settings["limit"], "confidence": settings["confidence"],
+            "selection_mode": settings["selection_mode"], "input_price": settings["input_price"],
+            "output_price": settings["output_price"], "cost_limit": settings["cost_limit"],
+        },
+    )
+
+    resume_manifest_ok = True
+    resume_mismatches: list[str] = []
+    if llm_path.exists() and (bool(settings["resume"]) or bool(settings["retry_errors_only"])):
+        resume_manifest_ok, resume_mismatches = validate_resume_manifest(manifest_path, current_manifest)
+        if not resume_manifest_ok:
+            st.error("기존 결과와 현재 실행 설정이 달라 안전하게 이어서 처리할 수 없습니다.")
+            st.code("\n".join(resume_mismatches))
+            st.caption("모델/프롬프트/작업계획/배치 범위를 원래 값으로 되돌리거나 새 출력 접두어로 시작하세요.")
 
     overwrite_confirm = True
     if llm_path.exists() and not bool(settings["resume"]) and not bool(settings["retry_errors_only"]):
@@ -284,32 +320,23 @@ def main() -> None:
         stop_reason = str(state.get("stop_reason", "") or "")
         current_box.warning(f"중지 사유: {stop_reason}") if stop_reason else (current_box.info(f"최근 처리: `{image_id}`") if image_id else None)
 
-    plan_ready = (not production_mode) or work_plan_path.exists()
+    plan_ready = (not production_mode) or (work_plan_path.exists() and plan_binding_ready)
     production_scope_ok = (not production_mode) or (settings["source"] == "errors" and settings["split"] in {"train", "val", "test"})
     run_disabled = (
         (not bool(settings["api_key_exists"])) or (not execution_input.exists()) or (not overwrite_confirm)
         or (not bool(settings["allow_unpriced"])) or (not bool(settings["batch_size_confirmed"]))
-        or (not plan_ready) or (not production_scope_ok)
+        or (not plan_ready) or (not production_scope_ok) or (not resume_manifest_ok)
     )
 
     if st.button("OpenAI 실행 / 이어서 처리", type="primary", use_container_width=True, disabled=run_disabled):
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         batch_id = str(settings["output_prefix"])
-        manifest = build_manifest(
-            project_root=PROJECT_ROOT,
-            batch_id=batch_id,
-            model=str(settings["model"]),
-            prompt_path=prompt_path,
-            index_path=index_path,
-            work_plan_path=work_plan_path if production_mode else None,
-            settings={
-                "work_mode": settings["work_mode"], "source": settings["source"], "split": settings["split"],
-                "start": settings["start"], "limit": settings["limit"], "confidence": settings["confidence"],
-                "selection_mode": settings["selection_mode"], "input_price": settings["input_price"],
-                "output_price": settings["output_price"], "cost_limit": settings["cost_limit"],
-            },
-        )
-        write_manifest(OUTPUTS_DIR / "run_manifests" / f"{batch_id}.json", manifest)
+        # Only write a new manifest for a new batch. A valid resume keeps the original
+        # manifest so provenance is not silently replaced by a later run.
+        if not llm_path.exists():
+            write_manifest(manifest_path, current_manifest)
+        elif not (bool(settings["resume"]) or bool(settings["retry_errors_only"])):
+            write_manifest(manifest_path, current_manifest)
         try:
             result = run_llm(
                 input_csv=execution_input,
@@ -332,7 +359,8 @@ def main() -> None:
     show_csv_preview(llm_path, "OpenAI 결과")
 
     st.markdown("## 3) 기존 JSON 라벨과 비교")
-    if st.button("비교 실행", type="primary", use_container_width=True):
+    compare_disabled = production_mode and not plan_binding_ready
+    if st.button("비교 실행", type="primary", use_container_width=True, disabled=compare_disabled):
         if not llm_path.exists():
             st.error("먼저 OpenAI 결과 CSV를 생성하세요.")
         else:
@@ -341,7 +369,7 @@ def main() -> None:
     show_csv_preview(compare_path, "비교 결과")
 
     st.markdown("## 4) 우선순위 검수 목록 생성")
-    if st.button("검수 목록 생성", type="primary", use_container_width=True):
+    if st.button("검수 목록 생성", type="primary", use_container_width=True, disabled=compare_disabled):
         if not compare_path.exists():
             st.error("먼저 비교 결과 CSV를 생성하세요.")
         else:
