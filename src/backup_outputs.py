@@ -18,6 +18,7 @@ DEFAULT_RELATIVE_PATHS = [
     "review_events",
     "review_history",
     "quality",
+    "clean_datasets",
     "model_eval",
 ]
 
