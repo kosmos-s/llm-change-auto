@@ -1,11 +1,17 @@
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
 import pandas as pd
 
-from src.production_integrity import write_plan_metadata
-from src.team_review_exchange import export_review_package, merge_review_package, preview_review_package
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from production_integrity import write_plan_metadata
+from team_review_exchange import export_review_package, merge_review_package, preview_review_package
 
 
 class TeamReviewExchangeTests(unittest.TestCase):
