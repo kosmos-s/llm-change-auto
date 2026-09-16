@@ -33,6 +33,27 @@ class ProductionSafetyTest(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(int(result.iloc[0]["llm_change"]), 1)
 
+    def test_cross_file_processed_at_beats_file_mtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            results_dir = Path(tmp)
+            newer_inference = results_dir / "prod_openai_new.csv"
+            older_inference = results_dir / "prod_openai_old.csv"
+            common = {
+                "group": "errors", "split": "train", "relative_folder": "a", "image_id": "x1",
+                "llm_provider": "openai", "work_mode": "production", "error": "",
+            }
+            pd.DataFrame([{**common, "processed_at": "2026-01-01T12:00:00", "llm_change": 1}]).to_csv(newer_inference, index=False)
+            pd.DataFrame([{**common, "processed_at": "2026-01-01T11:00:00", "llm_change": 0}]).to_csv(older_inference, index=False)
+
+            # Simulate an older result file being copied/touched later on disk.
+            os.utime(newer_inference, (1000, 1000))
+            os.utime(older_inference, (2000, 2000))
+
+            result = unique_openai_results(results_dir)
+            self.assertEqual(len(result), 1)
+            self.assertEqual(int(result.iloc[0]["llm_change"]), 1)
+            self.assertEqual(str(result.iloc[0]["processed_at"]), "2026-01-01T12:00:00")
+
     def test_explicit_test_runs_do_not_count_as_production(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             results_dir = Path(tmp)
