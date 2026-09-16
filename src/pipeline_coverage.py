@@ -8,6 +8,8 @@ import pandas as pd
 
 from work_plan import logical_key_frame
 
+PRODUCTION_MODES = {"production", "prod", "본작업"}
+
 
 def _plan_keys(work_plan_path: Path) -> set[str]:
     if not work_plan_path.exists():
@@ -29,6 +31,15 @@ def _rows_from_csv_dir(directory: Path, pattern: str) -> pd.DataFrame:
             continue
         if frame.empty or "image_id" not in frame.columns:
             continue
+
+        # Final production coverage must never be satisfied by test/pilot compare files.
+        # Current production outputs always carry work_mode from the OpenAI result row.
+        if "work_mode" not in frame.columns:
+            continue
+        mode = frame["work_mode"].fillna("").astype(str).str.strip().str.lower()
+        frame = frame[mode.isin(PRODUCTION_MODES)].copy()
+        if frame.empty:
+            continue
         frames.append(frame)
     return pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
 
@@ -49,13 +60,13 @@ def _coverage_count(rows: pd.DataFrame, plan_keys: set[str]) -> int:
 
 
 def pipeline_coverage(outputs_dir: Path, work_plan_path: Path) -> dict[str, int | bool]:
-    """Return unique work-plan coverage at compare and review-decision stages.
+    """Return unique production work-plan coverage at compare/review-decision stages.
 
     `make_review_list` intentionally contains only rows that actually require human
     review, so it cannot prove that all production samples received a review decision.
     The decision itself is produced by compare_labels as `review_required_final`.
-    Therefore review-decision coverage is measured from compare rows where that field
-    exists and is non-empty.
+    Therefore review-decision coverage is measured from production compare rows where
+    that field exists and is non-empty.
     """
     plan_keys = _plan_keys(work_plan_path)
     target = len(plan_keys)
