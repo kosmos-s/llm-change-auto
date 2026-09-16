@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 from pipeline_coverage import pipeline_coverage
+from production_integrity import validate_plan_binding
 from results_inventory import unique_openai_results
 from work_plan import logical_key_frame
 
@@ -102,6 +103,13 @@ def unresolved_review_items(review_lists_dir: Path, reviewed_root: Path, event_c
                 continue
             if frame.empty or "image_id" not in frame.columns:
                 continue
+            if "work_mode" in frame.columns:
+                mode = frame["work_mode"].fillna("").astype(str).str.strip().str.lower()
+                frame = frame[mode.isin({"production", "prod", "본작업"})].copy()
+            elif work_plan_path is not None:
+                # New production review lists always carry work_mode. Legacy/test lists
+                # without it must not satisfy or block a frozen production plan.
+                continue
             if "review_required_final" in frame.columns:
                 frame = frame[frame["review_required_final"].fillna("").astype(str).str.lower().isin(TRUE_VALUES)].copy()
             frame["_review_list"] = path.name
@@ -132,6 +140,8 @@ def unresolved_review_items(review_lists_dir: Path, reviewed_root: Path, event_c
 
 def final_gate_summary(outputs_dir: Path, target_total: int) -> dict[str, object]:
     work_plan_path = outputs_dir / "work_plan_3000.csv"
+    index_path = outputs_dir / "dataset_index.csv"
+    binding = validate_plan_binding(index_path, work_plan_path)
     success, failed = successful_openai_results(outputs_dir / "llm_results", work_plan_path if work_plan_path.exists() else None)
     pending = unresolved_review_items(outputs_dir / "review_lists", outputs_dir / "reviewed_json", outputs_dir / "review_events" / "review_events.csv", work_plan_path if work_plan_path.exists() else None)
     try:
@@ -159,9 +169,12 @@ def final_gate_summary(outputs_dir: Path, target_total: int) -> dict[str, object
         "pending_review_count": len(pending),
         "deferred_count": int((pending.get("review_state", pd.Series(dtype=str)) == "deferred").sum()) if not pending.empty else 0,
         "work_plan_present": work_plan_path.exists(),
+        "plan_binding_ready": bool(binding["ready"]),
+        "plan_binding_reasons": list(binding["reasons"]),
         "coverage_ready": bool(coverage["ready"]),
         "ready": bool(
             work_plan_path.exists()
+            and bool(binding["ready"])
             and len(success) >= effective_target
             and len(failed) == 0
             and bool(coverage["ready"])
