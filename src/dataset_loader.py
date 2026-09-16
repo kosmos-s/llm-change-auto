@@ -56,11 +56,27 @@ def find_combined_images(root: str | Path, split: str | None = None, source: str
     return sorted(items, key=lambda item: (item.source, item.split, item.relative_folder, item.image_id))
 
 
-def _local_paths(dataset_root: Path, source: str, split: str, relative_folder: str, image_id: str) -> tuple[Path, Path, Path, Path]:
-    base = dataset_root / source / split
+def _paths_from_base(base: Path, relative_folder: str, image_id: str) -> tuple[Path, Path, Path, Path]:
     if relative_folder and relative_folder != ".":
         base = base / Path(relative_folder)
-    return base / f"{image_id}_combined.jpg", base / f"{image_id}_combined.json", base / f"{image_id}_left.jpg", base / f"{image_id}_right.jpg"
+    return (
+        base / f"{image_id}_combined.jpg",
+        base / f"{image_id}_combined.json",
+        base / f"{image_id}_left.jpg",
+        base / f"{image_id}_right.jpg",
+    )
+
+
+def _local_paths(dataset_root: Path, source: str, split: str, relative_folder: str, image_id: str) -> tuple[Path, Path, Path, Path]:
+    """Resolve a logical sample against any dataset layout supported by the loader."""
+    candidates = candidate_split_paths(dataset_root, source, split)
+    for split_root in candidates:
+        paths = _paths_from_base(split_root, relative_folder, image_id)
+        if paths[0].exists():
+            return paths
+
+    fallback_root = candidates[0] if candidates else dataset_root / source / split
+    return _paths_from_base(fallback_root, relative_folder, image_id)
 
 
 def find_items_from_review_csv(csv_path: str | Path, dataset_root: str | Path | None = None) -> list[SampleItem]:
