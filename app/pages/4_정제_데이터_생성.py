@@ -19,7 +19,7 @@ from data_quality import summarize_quality, validate_index
 from export_clean_dataset import build_clean_manifest
 from make_quality_review_list import make_quality_review_list
 from project_paths import dataset_root_default, ensure_output_dirs
-from quality_actions import build_quality_action_plan
+from quality_actions import build_quality_action_plan, build_split_leakage_details
 
 OUTPUTS_DIR = ensure_output_dirs(PROJECT_ROOT)
 
@@ -95,6 +95,23 @@ if quality_csv.exists():
         quality_errors = None
 
 if saved_quality is not None and not saved_quality.empty and "code" in saved_quality.columns:
+    if (saved_quality["code"].astype(str) == "split_leakage").any() and index_csv.exists():
+        try:
+            index_df = pd.read_csv(index_csv)
+            leakage_details = build_split_leakage_details(index_df, saved_quality)
+        except Exception:
+            leakage_details = pd.DataFrame()
+        if not leakage_details.empty:
+            st.markdown("### split leakage 실제 경로")
+            st.error("아래 항목은 같은 group 내부에서 여러 split에 존재합니다. 자동 삭제하지 말고 어느 split에 유지할지 결정한 뒤 원본 분할을 정리하세요.")
+            st.dataframe(leakage_details, use_container_width=True, hide_index=True)
+            st.download_button(
+                "split leakage 상세 CSV 다운로드",
+                data=leakage_details.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig"),
+                file_name=f"{version}_split_leakage_details.csv",
+                mime="text/csv",
+            )
+
     st.markdown("### 품질 이슈를 사람 검수로 보내기")
     code_options = sorted(saved_quality["code"].dropna().astype(str).unique().tolist())
     default_codes = [code for code in ["artifact_logic"] if code in code_options]
