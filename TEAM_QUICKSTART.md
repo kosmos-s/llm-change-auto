@@ -41,7 +41,7 @@ errors/train 1,000
 errors/val   1,000
 errors/test  1,000
 ```
-생성 시 `work_plan_3000.meta.json`에 dataset index/work plan SHA256이 같이 저장됩니다. 이후 두 파일 중 하나라도 바뀌면 `STALE / BLOCK` 상태가 되며 본작업 실행과 Final이 차단됩니다.
+생성 시 `work_plan_3000.meta.json`에 dataset index/work plan SHA256이 같이 저장됩니다. 이후 해당 PC에서 두 파일 중 하나라도 바뀌면 `STALE / BLOCK` 상태가 되며 본작업 실행과 Final이 차단됩니다.
 
 ### OpenAI 처리
 진행률은 **성공한 고유 샘플만** 3,000건에 포함합니다. API 오류는 성공 건수에 포함하지 않으며 Retry로 0건까지 처리합니다.
@@ -63,11 +63,11 @@ OpenAI 실행 / Resume
 보류 항목은 최종 완료가 아닙니다. `final*` Snapshot 전에 미검수/보류가 0이어야 합니다.
 
 ### 팀원이 여러 PC에서 검수할 때
-각 PC의 `.env`에 서로 다른 `REVIEWER_NAME`을 설정합니다. **반드시 같은 `dataset_index.csv`, `work_plan_3000.csv`, `work_plan_3000.meta.json`을 사용하는 본작업 환경**에서 검수하세요.
+각 PC의 `.env`에 서로 다른 `REVIEWER_NAME`을 설정합니다. 데이터셋의 **논리적 내용과 3,000건 대상은 동일**해야 하지만 로컬 경로는 달라도 됩니다. 예를 들어 한 PC는 `C:/Users/A/...`, 다른 PC는 `D:/team/...`여도 괜찮습니다.
 
-한 PC에서 작업계획을 고정한 뒤 위 3개 파일을 팀원 PC의 `outputs/`에 동일하게 전달하세요. 5번의 프로젝트 백업 ZIP에도 이 파일들이 포함됩니다.
+각 PC에서 같은 데이터셋을 스캔하고 동일한 방식으로 work plan을 고정하면, 팀원 검수 ZIP은 절대경로를 제외한 portable SHA256으로 같은 작업인지 확인합니다. 따라서 사용자명/드라이브가 달라도 병합할 수 있습니다.
 
-8번 화면에서 **내 검수 결과 ZIP 만들기**로 전달하고, 받는 PC에서 ZIP을 업로드해 미리보기 후 병합합니다. 패키지의 dataset index/work plan SHA가 현재 PC와 다르면 병합 버튼이 차단됩니다. 같은 JSON이 서로 다르면 `conflict`로 표시됩니다. 병합 후 3번의 `검수 이력 갱신`을 다시 실행합니다.
+8번 화면에서 **내 검수 결과 ZIP 만들기**로 전달하고, 받는 PC에서 ZIP을 업로드해 미리보기 후 병합합니다. 논리 데이터/work plan이 다르면 병합 버튼이 차단됩니다. ZIP 내부 JSON도 SHA256을 재검사합니다. 같은 JSON이 서로 다르면 `conflict`로 표시됩니다. 병합 후 3번의 `검수 이력 갱신`을 다시 실행합니다.
 
 ### Final 조건
 8번에서 아래 상태를 모두 확인합니다.
