@@ -22,9 +22,8 @@ def dataset_root_default(project_root: Path | None = None) -> Path:
 
 
 def outputs_root(project_root: Path) -> Path:
-    configured = _env_text("OUTPUT_DIR") or "outputs"
-    path = Path(configured).expanduser()
-    return path if path.is_absolute() else project_root / path
+    """Runtime outputs stay under the repository so every page uses one location."""
+    return project_root / "outputs"
 
 
 def openai_target_total(default: int = 3000) -> int:
