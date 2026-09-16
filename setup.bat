@@ -14,7 +14,6 @@ if not errorlevel 1 (
   py -3.11 -c "import sys; assert sys.version_info[:2] == (3, 11)" >nul 2>nul
   if not errorlevel 1 set "PY_CMD=py -3.11"
 )
-
 if not defined PY_CMD (
   where python >nul 2>nul
   if not errorlevel 1 (
@@ -22,10 +21,8 @@ if not defined PY_CMD (
     if not errorlevel 1 set "PY_CMD=python"
   )
 )
-
 if not defined PY_CMD (
   echo [ERROR] Python 3.11을 찾지 못했습니다.
-  echo 이 프로젝트의 고정 패키지 환경은 Python 3.11 기준입니다.
   echo Python 3.11 설치 시 Add Python to PATH를 체크한 뒤 다시 실행하세요.
   pause
   exit /b 1
@@ -54,7 +51,6 @@ if errorlevel 1 goto :fail
 
 echo [3/5] Python 패키지 설치...
 if exist "requirements-lock.txt" (
-  echo 재현 가능한 고정 버전 requirements-lock.txt 사용
   pip install -r requirements-lock.txt
 ) else (
   pip install -r requirements.txt
@@ -77,54 +73,49 @@ for %%D in (
   "outputs\review_history"
   "outputs\backups\reviewed_json"
   "outputs\backups\project_outputs"
+  "outputs\backups\reviewed_json_merge"
   "outputs\quality"
   "outputs\clean_datasets"
   "outputs\model_eval"
+  "outputs\review_packages"
+  "outputs\run_manifests"
   "logs"
 ) do (
   if not exist "%%~D" mkdir "%%~D" >nul 2>nul
 )
 
-echo [5/5] 데이터 경로 확인...
-set "DEFAULT_PROJECT=%USERPROFILE%\Desktop\산학과제"
-set "DEFAULT_DATASET=!DEFAULT_PROJECT!\dataset_sample"
-
+echo [5/5] 데이터 경로 / 검수자 설정...
+set "DEFAULT_DATASET=%USERPROFILE%\Desktop\산학과제\dataset_sample"
+set "DATASET_PATH="
 if exist "!DEFAULT_DATASET!" (
-  echo [OK] 기본 데이터 경로 확인: !DEFAULT_DATASET!
+  set "DATASET_PATH=!DEFAULT_DATASET!"
+  echo [OK] 기본 데이터 경로 확인: !DATASET_PATH!
 ) else (
-  echo.
   echo 기본 데이터 경로가 없습니다:
   echo   !DEFAULT_DATASET!
-  echo.
-  echo 데이터가 다른 위치에 있다면 그 폴더를 연결할 수 있습니다.
   set /p "DATASET_PATH=dataset_sample 실제 경로 입력 ^(건너뛰려면 Enter^): "
-  if defined DATASET_PATH (
-    if not exist "!DATASET_PATH!" (
-      echo [WARN] 입력한 경로가 존재하지 않습니다. UI에서 직접 지정하세요.
-    ) else (
-      if not exist "!DEFAULT_PROJECT!" mkdir "!DEFAULT_PROJECT!" >nul 2>nul
-      mklink /J "!DEFAULT_DATASET!" "!DATASET_PATH!" >nul 2>nul
-      if exist "!DEFAULT_DATASET!" (
-        echo [OK] 데이터 폴더 연결 완료
-      ) else (
-        echo [WARN] 폴더 연결에 실패했습니다.
-        echo .env의 DATASET_ROOT 또는 UI에서 실제 경로를 지정하세요.
-      )
-    )
+)
+
+set /p "REVIEWER_NAME_INPUT=검수자 이름 입력 ^(건너뛰려면 Enter^): "
+if defined DATASET_PATH (
+  if exist "!DATASET_PATH!" (
+    python scripts\configure_env.py --env .env --dataset-root "!DATASET_PATH!" --reviewer-name "!REVIEWER_NAME_INPUT!"
+    if errorlevel 1 echo [WARN] .env 자동 설정 실패. 직접 확인하세요.
   ) else (
-    echo [INFO] 데이터 경로 설정을 건너뜁니다. .env 또는 UI에서 직접 지정할 수 있습니다.
+    echo [WARN] 입력한 데이터 경로가 존재하지 않습니다.
   )
+) else if defined REVIEWER_NAME_INPUT (
+  python scripts\configure_env.py --env .env --reviewer-name "!REVIEWER_NAME_INPUT!"
 )
 
 echo.
 echo ================================================
 echo 설치 완료
 echo 1. 메모장에서 .env를 열어 OPENAI_API_KEY를 입력하세요.
-echo 2. 데이터가 기본 경로가 아니면 DATASET_ROOT도 입력할 수 있습니다.
+echo 2. DATASET_ROOT / REVIEWER_NAME을 확인하세요.
 echo 3. 이후 run.bat을 실행하세요.
 echo ================================================
 echo.
-
 start "" notepad "%~dp0.env"
 pause
 exit /b 0
@@ -132,6 +123,5 @@ exit /b 0
 :fail
 echo.
 echo [ERROR] 설치 중 오류가 발생했습니다.
-echo 위 오류 메시지를 확인하세요.
 pause
 exit /b 1
