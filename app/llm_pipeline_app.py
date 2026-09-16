@@ -278,8 +278,11 @@ def main() -> None:
         settings={
             "work_mode": settings["work_mode"], "source": settings["source"], "split": settings["split"],
             "start": settings["start"], "limit": settings["limit"], "confidence": settings["confidence"],
-            "selection_mode": settings["selection_mode"], "input_price": settings["input_price"],
-            "output_price": settings["output_price"], "cost_limit": settings["cost_limit"],
+            "selection_mode": settings["selection_mode"],
+            "error_types": sorted(str(value) for value in settings["error_types"]),
+            "exclude_reviewed": bool(settings["exclude_reviewed"]),
+            "input_price": settings["input_price"], "output_price": settings["output_price"],
+            "cost_limit": settings["cost_limit"],
         },
     )
 
@@ -290,7 +293,7 @@ def main() -> None:
         if not resume_manifest_ok:
             st.error("기존 결과와 현재 실행 설정이 달라 안전하게 이어서 처리할 수 없습니다.")
             st.code("\n".join(resume_mismatches))
-            st.caption("모델/프롬프트/작업계획/배치 범위를 원래 값으로 되돌리거나 새 출력 접두어로 시작하세요.")
+            st.caption("모델/프롬프트/작업계획/배치 범위/선택 필터를 원래 값으로 되돌리거나 새 출력 접두어로 시작하세요.")
 
     overwrite_confirm = True
     if llm_path.exists() and not bool(settings["resume"]) and not bool(settings["retry_errors_only"]):
