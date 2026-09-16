@@ -1,13 +1,15 @@
 """Compare original JSON labels and LLM outputs.
 
-Default review policy is intentionally conservative for production use:
+Production review policy keeps human review focused on cases that can affect the
+training labels while still avoiding a full 3,000-item manual pass:
 - API errors
 - high-level change/no-change disagreement
+- change-type/detail-label disagreement
+- LLM-requested human review for ambiguous cases
 - invalid LLM output (change=1 but no detail class)
 
-Other signals such as LLM self-review, detail-label mismatch, and low confidence
-are still recorded for analysis/priority, but do not automatically force human
-review in the default policy. This keeps review lists useful for large batches.
+Low confidence remains recorded as a signal. The production prompt is expected to
+set `review_required=true` when low confidence reflects genuine ambiguity.
 """
 
 from __future__ import annotations
@@ -124,15 +126,19 @@ def compare(
         if empty_class_when_change:
             review_signals.append("empty_class_when_change")
 
-        # Core policy is the production default. It focuses human review on cases
-        # that directly challenge the change/no-change ground truth or indicate an
-        # invalid/failed LLM result. Detail mismatches remain visible as signals.
+        # Core is the production default. Type/detail disagreements matter because the
+        # project explicitly evaluates change-type labels, and an LLM-requested review
+        # is the prompt's mechanism for surfacing genuinely ambiguous samples.
         if review_policy == "core":
             review_reasons = []
             if llm_error:
                 review_reasons.append("llm_error")
+            if llm_self_review:
+                review_reasons.append("llm_review_required")
             if label_mismatch:
                 review_reasons.append("change_mismatch")
+            if detail_mismatch:
+                review_reasons.append("detail_mismatch")
             if empty_class_when_change:
                 review_reasons.append("empty_class_when_change")
         else:
