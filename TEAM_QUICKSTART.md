@@ -65,6 +65,8 @@ OpenAI 실행 / Resume
 ### 팀원이 여러 PC에서 검수할 때
 각 PC의 `.env`에 서로 다른 `REVIEWER_NAME`을 설정합니다. **반드시 같은 `dataset_index.csv`, `work_plan_3000.csv`, `work_plan_3000.meta.json`을 사용하는 본작업 환경**에서 검수하세요.
 
+한 PC에서 작업계획을 고정한 뒤 위 3개 파일을 팀원 PC의 `outputs/`에 동일하게 전달하세요. 5번의 프로젝트 백업 ZIP에도 이 파일들이 포함됩니다.
+
 8번 화면에서 **내 검수 결과 ZIP 만들기**로 전달하고, 받는 PC에서 ZIP을 업로드해 미리보기 후 병합합니다. 패키지의 dataset index/work plan SHA가 현재 PC와 다르면 병합 버튼이 차단됩니다. 같은 JSON이 서로 다르면 `conflict`로 표시됩니다. 병합 후 3번의 `검수 이력 갱신`을 다시 실행합니다.
 
 ### Final 조건
