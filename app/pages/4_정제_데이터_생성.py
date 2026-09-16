@@ -177,14 +177,27 @@ if st.button("2) 버전 Snapshot 생성", type="primary", use_container_width=Tr
             st.error("Final Production Gate 조건을 만족하지 않습니다.")
             st.stop()
 
-        # Re-run effective validation immediately before export so a reviewed JSON
-        # changed after the previous report cannot slip into the final snapshot.
+        live_quality_errors = int(quality_errors or 0)
+        live_effective_errors = int(effective_errors or 0)
         if final_version:
+            # Re-run BOTH structure and effective-label validation at the exact export
+            # moment. This catches file deletions/JSON changes that happened after the
+            # user previously generated the saved reports.
+            root = Path(dataset_root_text) if dataset_root_text.strip() else None
+            live_quality = validate_index(index_csv, root)
+            live_summary = summarize_quality(live_quality)
+            live_quality_errors = int(live_summary["errors"])
+            live_quality.to_csv(quality_csv, index=False, encoding="utf-8-sig")
+            build_quality_action_plan(live_quality).to_csv(action_csv, index=False, encoding="utf-8-sig")
+            if live_quality_errors:
+                st.error(f"Snapshot 직전 구조 재검사에서 {live_quality_errors}개 오류가 발견되었습니다.")
+                st.stop()
+
             live_effective = validate_effective_labels(index_csv, reviewed_root)
-            live_errors = int((live_effective["severity"].astype(str).str.lower() == "error").sum()) if not live_effective.empty else 0
+            live_effective_errors = int((live_effective["severity"].astype(str).str.lower() == "error").sum()) if not live_effective.empty else 0
             live_effective.to_csv(effective_quality_csv, index=False, encoding="utf-8-sig")
-            if live_errors:
-                st.error(f"Snapshot 직전 Effective JSON 재검사에서 {live_errors}개 오류가 발견되었습니다.")
+            if live_effective_errors:
+                st.error(f"Snapshot 직전 Effective JSON 재검사에서 {live_effective_errors}개 오류가 발견되었습니다.")
                 st.stop()
 
         with st.spinner("정제 데이터 snapshot 생성 중..."):
@@ -205,8 +218,8 @@ if st.button("2) 버전 Snapshot 생성", type="primary", use_container_width=Tr
             "reviewed_samples": reviewed_count,
             "original_samples": original_count,
             "reviewed_ratio": reviewed_count / len(result) if len(result) else 0.0,
-            "quality_errors": int(quality_errors or 0),
-            "effective_quality_errors": int(effective_errors or 0),
+            "quality_errors": live_quality_errors,
+            "effective_quality_errors": live_effective_errors,
             "production_gate": production_gate,
             "quality_report": str(quality_csv),
             "effective_quality_report": str(effective_quality_csv),
